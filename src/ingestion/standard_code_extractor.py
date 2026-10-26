@@ -1,4 +1,10 @@
-"""Extract standard-code candidates from text PDFs and Excel workbooks."""
+"""Extract standard-code candidates from PDFs, DOCX and Excel workbooks.
+
+This is the generic multi-format ingestion layer. It scans *all* text
+(paragraphs, table cells, PDF pages/tables, Excel cells) for candidate
+codes. It is different from ``src/parsers/word_table_parser.py``, which
+only understands DOCX tables with a fixed STT / title / code layout.
+"""
 
 from pathlib import Path
 import re
@@ -19,7 +25,7 @@ STANDARD_CODE_PATTERN = re.compile(
     r"IEC|EN(?:\s+ISO)?|BS(?:\s+EN)?|ASTM|JIS|DIN|ANSI|ASME|IEEE|"
     r"SAE|API|AASHTO|AWWA|UL|GB|ГОСТ)\s*[-:]?\s*"
     r"(?:[A-Z]{1,6}\s*)?\d{1,6}(?:[./-]\d{1,6})*"
-    r"(?:\s*:\s*\d{4})?(?:\s*/\s*[A-Z0-9Đ-]+)?"
+    r"(?:\s*:\s*\d{4})?(?:\s*/\s*[A-Z0-9Đ-]+(?::\s*\d{4})?)?"
     r"(?:\s*\+\s*(?:AMD|A)\s*\d+(?::\d{4})?)?)",
     re.IGNORECASE,
 )
@@ -120,11 +126,47 @@ def extract_standard_codes_from_excel(file_path, use_ai_fallback=False) -> list[
     return _deduplicate(records)
 
 
+def extract_standard_codes_from_docx(file_path, use_ai_fallback=False) -> list[dict]:
+    """Extract codes from every paragraph and table cell of a DOCX file.
+
+    Paragraphs and tables are scanned as plain text, so codes need not be
+    in a dedicated code column. The result records the paragraph index
+    and/or table/row where each distinct code first appears.
+    """
+    try:
+        from docx import Document
+    except ImportError as exc:
+        raise RuntimeError("DOCX extraction requires python-docx; install project dependencies") from exc
+
+    path = Path(file_path)
+    doc = Document(str(path))
+    records = []
+
+    for para_number, paragraph in enumerate(doc.paragraphs, start=1):
+        records.extend(_extract_from_text(
+            paragraph.text or "",
+            {"file": str(path), "paragraph": para_number, "table": None, "row": None},
+            use_ai_fallback,
+        ))
+
+    for table_number, table in enumerate(doc.tables, start=1):
+        for row_number, row in enumerate(table.rows, start=1):
+            row_text = " | ".join(_text(cell.text) for cell in row.cells if _text(cell.text))
+            records.extend(_extract_from_text(
+                row_text,
+                {"file": str(path), "paragraph": None, "table": table_number, "row": row_number},
+                use_ai_fallback,
+            ))
+    return _deduplicate(records)
+
+
 def extract_standard_codes(file_path, use_ai_fallback=False) -> list[dict]:
-    """Dispatch PDF or Excel files to the matching standard-code extractor."""
+    """Dispatch PDF, DOCX or Excel files to the matching standard-code extractor."""
     suffix = Path(file_path).suffix.lower()
     if suffix == ".pdf":
         return extract_standard_codes_from_pdf(file_path, use_ai_fallback)
+    if suffix == ".docx":
+        return extract_standard_codes_from_docx(file_path, use_ai_fallback)
     if suffix in {".xlsx", ".xls", ".xlsm"}:
         return extract_standard_codes_from_excel(file_path, use_ai_fallback)
-    raise ValueError(f"Unsupported file type: {suffix}. Supported: PDF, XLSX, XLS, XLSM")
+    raise ValueError(f"Unsupported file type: {suffix}. Supported: PDF, DOCX, XLSX, XLS, XLSM")

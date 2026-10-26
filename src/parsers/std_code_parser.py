@@ -4,6 +4,13 @@ import re
 from decimal import Decimal, ROUND_HALF_UP
 
 
+# Pipeline rule (see docs/PIPELINE.md): a deterministic parse is treated as
+# verified only at this confidence threshold. Anything below it -- or a
+# parse failure -- must go through the Gemini fallback, which always
+# returns verified=False.
+VERIFIED_THRESHOLD = Decimal("0.8")
+
+
 WHITESPACE_REGEX = re.compile(r"\s+")
 
 CODE_REGEX = re.compile(
@@ -159,7 +166,10 @@ def parse_standard_code(raw_code: str) -> dict:
         "version_text": None,
 
         "confidence_score": 0.0,
-        "confidence_breakdown": {}
+        "confidence_breakdown": {},
+        # Deterministic verification flag. False on a parse failure and
+        # until the confidence threshold below is met.
+        "verified": False,
     }
 
     # -------------------------------------------------
@@ -225,19 +235,27 @@ def parse_standard_code(raw_code: str) -> dict:
 
     result["confidence_score"] = score
     result["confidence_breakdown"] = breakdown
+    result["verified"] = (
+        result["std_main_number"] is not None
+        and result["std_year"] is not None
+        and score >= VERIFIED_THRESHOLD
+    )
 
     return result
 
 
 def parse_standard_code_with_ai_fallback(raw_code: str) -> dict:
-    """Use Gemini only when the deterministic parser cannot read the code.
+    """Use Gemini when the deterministic parse is not verified.
 
-    The returned structure keeps the normal parser fields and adds AI review
-    metadata. A Gemini suggestion is never treated as verified.
+    That is: on a parse failure *or* when ``confidence_score < 0.8``.
+    The returned structure keeps the normal parser fields and adds AI
+    review metadata. A Gemini suggestion is never treated as verified,
+    and ``explanation`` is the pipeline-facing alias for Gemini's
+    ``reason`` field.
     """
     result = parse_standard_code(raw_code)
-    if result["std_main_number"] is not None:
-        result["ai_fallback"] = {"used": False, "verified": False}
+    if result.get("verified"):
+        result["ai_fallback"] = {"used": False, "verified": True, "explanation": ""}
         return result
 
     try:
@@ -248,28 +266,25 @@ def parse_standard_code_with_ai_fallback(raw_code: str) -> dict:
 
     suggestion = suggest_standard_code(raw_code)
     candidate = suggestion.get("suggested_code")
+    explanation = suggestion.get("explanation") or suggestion.get("reason", "")
+    ai_meta = {
+        "used": True,
+        "suggestion": candidate,
+        "status": suggestion.get("status"),
+        "confidence": suggestion.get("confidence"),
+        "reason": suggestion.get("reason", ""),
+        "explanation": explanation,
+        "alternatives": suggestion.get("alternatives", []),
+        "verified": False,
+    }
     if candidate:
         parsed = parse_standard_code(candidate)
         if parsed["std_main_number"] is not None:
             parsed["raw_code"] = raw_code
-            parsed["ai_fallback"] = {
-                "used": True,
-                "suggestion": candidate,
-                "status": suggestion["status"],
-                "confidence": suggestion["confidence"],
-                "reason": suggestion["reason"],
-                "alternatives": suggestion["alternatives"],
-                "verified": False,
-            }
+            parsed["verified"] = False
+            parsed["ai_fallback"] = ai_meta
             return parsed
 
-    result["ai_fallback"] = {
-        "used": True,
-        "suggestion": candidate,
-        "status": suggestion["status"],
-        "confidence": suggestion["confidence"],
-        "reason": suggestion["reason"],
-        "alternatives": suggestion["alternatives"],
-        "verified": False,
-    }
+    result["verified"] = False
+    result["ai_fallback"] = ai_meta
     return result
