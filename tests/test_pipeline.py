@@ -3,8 +3,10 @@
 Run from the repo root with src/ on the path, as the existing tests do:
     PYTHONPATH=src python -m pytest tests/test_pipeline.py -q
 
-Gemini is never called in these tests: low-confidence cases use an
+Gemini is never called live in these tests: low-confidence cases use an
 injected fake suggester, and the failure case uses a raising suggester.
+The default is now Gemini ON (use_ai_fallback=True), so the
+no-AI case must be requested explicitly with use_ai_fallback=False.
 """
 
 import json
@@ -12,9 +14,23 @@ import json
 import pytest
 
 try:
-    from pipeline import OUTPUT_FIELDS, process_candidate, process_document, process_text
+    from pipeline import (
+        OUTPUT_FIELDS,
+        GeminiConfigurationError,
+        GeminiRequestError,
+        process_candidate,
+        process_document,
+        process_text,
+    )
 except ModuleNotFoundError:  # pragma: no cover - repo-root PYTHONPATH
-    from src.pipeline import OUTPUT_FIELDS, process_candidate, process_document, process_text  # type: ignore
+    from src.pipeline import (  # type: ignore
+        OUTPUT_FIELDS,
+        GeminiConfigurationError,
+        GeminiRequestError,
+        process_candidate,
+        process_document,
+        process_text,
+    )
 
 
 def test_output_schema_exact_fields():
@@ -81,6 +97,49 @@ def test_ai_failure_does_not_crash():
         "???", use_ai_fallback=True, ai_suggester=failing_suggester)
     assert record["verified"] is False
     assert "AI fallback failed" in record["explanation"]
+
+
+def test_low_confidence_default_calls_ai():
+    # Default is now use_ai_fallback=True: a low-confidence code must
+    # actually reach the suggester, not return "AI fallback not enabled".
+    seen = []
+
+    def fake_suggester(raw):
+        seen.append(raw)
+        return {
+            "suggested_code": "XYZ 1234:2020",
+            "status": "normalized",
+            "confidence": 0.9,
+            "reason": "Confirmed the XYZ designation.",
+            "explanation": "Confirmed the XYZ designation.",
+            "alternatives": [],
+        }
+
+    record = process_candidate("XYZ 1234:2020", ai_suggester=fake_suggester)
+    assert seen == ["XYZ 1234:2020"]
+    assert record["verified"] is False
+    assert record["explanation"].startswith("Confirmed the XYZ")
+
+
+def test_ai_configuration_error_is_clear_not_crash():
+    def config_suggester(raw):
+        raise GeminiConfigurationError("GEMINI_API_KEY is not configured")
+
+    record = process_candidate(
+        "XYZ 1234:2020", ai_suggester=config_suggester)
+    assert record["verified"] is False
+    assert "AI fallback unavailable" in record["explanation"]
+    assert "GEMINI_API_KEY" in record["explanation"]
+
+
+def test_ai_request_error_is_clear_not_crash():
+    def request_suggester(raw):
+        raise GeminiRequestError("Gemini standard-code request failed: 503")
+
+    record = process_candidate(
+        "XYZ 1234:2020", ai_suggester=request_suggester)
+    assert record["verified"] is False
+    assert "Gemini request error" in record["explanation"]
 
 
 def test_process_text_deduplicates():

@@ -26,7 +26,13 @@ STANDARD_CODE_PATTERN = re.compile(
     r"SAE|API|AASHTO|AWWA|UL|GB|ГОСТ)\s*[-:]?\s*"
     r"(?:[A-Z]{1,6}\s*)?\d{1,6}(?:[./-]\d{1,6})*"
     r"(?:\s*:\s*\d{4})?(?:\s*/\s*[A-Z0-9Đ-]+(?::\s*\d{4})?)?"
-    r"(?:\s*\+\s*(?:AMD|A)\s*\d+(?::\d{4})?)?)",
+    r"(?:\s*\+\s*(?:AMD|A)\s*\d+(?::\d{4})?)?"
+    # Optional parenthetical note, e.g. "(các phần 1-6)". It must be
+    # captured, not dropped: the parser turns a part-range note into
+    # parts, and Gemini's prompt treats it as a part range, not a
+    # version. Without this group, --text / document runs would lose
+    # the note before the parser ever saw it.
+    r"(?:\s*\([^)]*\))?)",
     re.IGNORECASE,
 )
 
