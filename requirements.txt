@@ -1,0 +1,50 @@
+# =========================
+# Core API
+# =========================
+fastapi
+uvicorn[standard]
+
+# =========================
+# ORM & Database (PostgreSQL)
+# =========================
+sqlalchemy>=2.0
+psycopg2-binary
+python-dotenv
+alembic
+
+# =========================
+# RAG / Embedding / Vector Store
+# =========================
+langchain
+langchain-community
+langchain-openai
+faiss-cpu
+tiktoken
+
+# =========================
+# Document ingestion (PDF, Word)
+# =========================
+pypdf
+pdfplumber
+python-docx
+unstructured
+
+# =========================
+# Data processing
+# =========================
+pandas
+numpy
+openpyxl
+xlrd
+
+# =========================
+# Utilities
+# =========================
+tqdm
+python-multipart
+requests
+
+# =========================
+# Development & Testing
+# =========================
+pytest
