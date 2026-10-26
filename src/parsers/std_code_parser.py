@@ -328,16 +328,24 @@ def _extract_part_range_from_version(version_text: str) -> list[str]:
     ``1-6`` / ``1 đến 3`` / ``1 to 3`` range becomes ``["1", "6"]``
     (pipeline output joins it back to ``"1-6"``), and a list such as
     ``các phần 1, 3, 5`` becomes ``["1", "3", "5"]``. A bare ``1-6``
-    with no keyword is also treated as a part range. Notes such as
+    with no keyword is also treated as a part range. The Vietnamese
+    range words matter here: ``từ X đến Y`` ("from X to Y") and
+    ``-X đến Y`` (leading hyphen = range start, not a negative sign)
+    are ranges too, even without the word "phần" and even when a
+    year follows in the same note, e.g. ``(từ 1 đến 10, 2019)`` or
+    ``(-1 đến 10, 2019)`` -> ``["1", "10"]``. Notes such as
     ``(rev 1)`` or ``(version 2)`` return [] and stay version_text.
     """
     if not version_text:
         return []
     text = version_text.strip().lower()
     has_part_keyword = "phần" in text or "part" in text
-    range_match = re.search(r"(\d+)\s*(?:-|–|—|đến|to)\s*(\d+)", text)
+    has_range_word = "từ" in text or "đến" in text or "tới" in text
+    range_match = re.search(
+        r"(\d+)\s*(?:-|–|—|đến|tới|to)\s*(?:phần\s*|part\s*)?(\d+)", text)
     if range_match and (
         has_part_keyword
+        or has_range_word
         or re.fullmatch(r"\s*\d+\s*(?:-|–|—)\s*\d+\s*", text)
     ):
         return [range_match.group(1), range_match.group(2)]
@@ -345,6 +353,41 @@ def _extract_part_range_from_version(version_text: str) -> list[str]:
         numbers = [n for n in re.findall(r"\d+", text) if not _is_year_token(n)]
         return numbers
     return []
+
+
+def _extract_year_from_version(version_text: str):
+    """Return the 4-digit year inside a parenthetical note, or None.
+
+    Used only as a fallback when no year was found outside the
+    parentheses, e.g. ``TCVN 13566 (từ 1 đến 10, 2019)`` -> 2019.
+    Small part numbers are never mistaken for a year: only a
+    1900-2100 token counts.
+    """
+    if not version_text:
+        return None
+    for token in re.findall(r"\d{4}", version_text):
+        if _is_year_token(token):
+            return int(token)
+    return None
+
+
+def _extract_vietnamese_range_from_rest(rest: str):
+    """Extract a 'từ X đến Y' / '-X đến Y' range outside parentheses.
+
+    Returns (parts, cleaned_rest). ``rest`` is the uppercase remainder
+    after the main number; the pattern is case-insensitive for the
+    Vietnamese words. The range segment is removed from the rest so
+    a following ``:2019`` / `` 2019`` can still be parsed as the year
+    by _parse_remainder. Returns ([], rest) when no such range is present.
+    """
+    match = re.search(
+        r"(?:từ\s*)?-?\s*(\d+)\s*(?:đến|tới)\s*(?:phần\s*)?(\d+)",
+        rest or "", re.IGNORECASE)
+    if not match:
+        return [], rest
+    parts = [match.group(1), match.group(2)]
+    cleaned = (rest[:match.start()] + rest[match.end():]).strip()
+    return parts, cleaned
 
 
 def parse_standard_code(raw_code: str) -> dict:
@@ -417,11 +460,21 @@ def parse_standard_code(raw_code: str) -> dict:
     # -------------------------------------------------
     # STEP 3 — PARTS / YEAR / SUFFIX
     # -------------------------------------------------
-    parts, year, suffix = _parse_remainder(rest, org_norm, org_part)
+    # Vietnamese range outside parentheses first, e.g.
+    # "TCVN 13566 từ 1 đến 10:2019" -> range ["1", "10"], rest ":2019".
+    range_from_rest, rest_cleaned = _extract_vietnamese_range_from_rest(rest)
+    parts, year, suffix = _parse_remainder(rest_cleaned, org_norm, org_part)
+    if range_from_rest and not parts:
+        parts = range_from_rest
     if not parts:
         # Part range/list carried only in the parenthetical note, e.g.
         # "TCVN 13566:2022 (các phần 1-6)" -> parts ["1", "6"].
         parts = _extract_part_range_from_version(result["version_text"])
+    if year is None:
+        # Year carried only in the parenthetical note, e.g.
+        # "TCVN 13566 (từ 1 đến 10, 2019)" -> year 2019, not null.
+        # An outside year, when present, always wins (see test).
+        year = _extract_year_from_version(result["version_text"])
     result["std_parts"] = parts
     result["std_part"] = ("-" + "-".join(parts)) if parts else None
     result["std_year"] = year
