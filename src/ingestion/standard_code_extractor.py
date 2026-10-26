@@ -27,6 +27,13 @@ STANDARD_CODE_PATTERN = re.compile(
     r"(?:[A-Z]{1,6}\s*)?\d{1,6}(?:[./-]\d{1,6})*"
     r"(?:\s*:\s*\d{4})?(?:\s*/\s*[A-Z0-9Đ-]+(?::\s*\d{4})?)?"
     r"(?:\s*\+\s*(?:AMD|A)\s*\d+(?::\d{4})?)?"
+    # Optional Vietnamese range outside parentheses, e.g.
+    # "TCVN 13566 từ 1 đến 10:2019" or "TCVN 13566-1 đến 10:2019".
+    # The endpoint is limited to 1-3 digits with (?!\d) so a
+    # sentence date range such as "TCVN 1234:2020 đến 2025" is
+    # NOT captured as a part range.
+    r"(?:\s*(?:từ|from)\s*-?\s*\d{1,3}(?!\d)\s*(?:đến|tới|to)\s*(?:phần\s*)?\d{1,3}(?!\d)(?:\s*:\s*\d{4})?)?"
+    r"(?:\s*(?:đến|tới)\s*(?:phần\s*)?\d{1,3}(?!\d)(?:\s*:\s*\d{4})?)?"
     # Optional parenthetical note, e.g. "(các phần 1-6)". It must be
     # captured, not dropped: the parser turns a part-range note into
     # parts, and Gemini's prompt treats it as a part range, not a
