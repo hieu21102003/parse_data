@@ -355,6 +355,44 @@ def _export_excel(records, output_path) -> Path:
     return export_to_excel(records, output_path)
 
 
+def _ensure_parent_dir(output_path: Path) -> None:
+    """Create the output file's parent directory if it does not exist.
+
+    This is the fix for FileNotFoundError on output paths whose
+    directory does not exist yet, e.g. ``output/ket_qua.xlsx`` on
+    any OS, or a Windows root-relative path such as
+    ``\\tmp\\ket_qua.xlsx`` (which is the root of the current drive,
+    not the current directory -- prefer a plain relative name
+    instead, see below).
+
+    Path handling, explicitly:
+      - ``ket_qua.xlsx`` (no directory): parent is ``.``, i.e. the
+        current working directory where the user ran the command.
+        Nothing is created; the file is written straight into cwd.
+        No hardcoded ``/tmp`` or ``\\tmp`` path is used anywhere.
+      - ``output/ket_qua.xlsx``: parent ``output`` is created with
+        ``parents=True`` (nested parents too) before any writing,
+        so writing never fails just because the folder is new.
+      - An absolute path is used as-is (it is the user's choice).
+
+    Raises RuntimeError with a clear message if the directory
+    cannot be created (e.g. no permission to create a root folder
+    on Windows), instead of letting a later write fail with a
+    bare FileNotFoundError.
+    """
+    parent = output_path.parent
+    if str(parent) in ("", "."):
+        return
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not create output directory {parent}: {exc}. "
+            "Use a relative file name such as ket_qua.xlsx, or a "
+            "directory you have permission to create."
+        ) from exc
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Standard-code extraction pipeline")
     parser.add_argument("files", nargs="*", help="PDF / DOCX / Excel files to process")
@@ -391,10 +429,24 @@ def main(argv=None) -> int:
     payload = json.dumps(records, ensure_ascii=False, indent=2)
     if args.output:
         output_path = Path(args.output)
+        # Create the parent directory FIRST, for both formats.
+        # Previously only the Excel exporter did this internally,
+        # and the JSON branch called write_text() directly, which
+        # raises FileNotFoundError when the directory does not
+        # exist (e.g. output/ket_qua.xlsx with no output/ folder).
+        try:
+            _ensure_parent_dir(output_path)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
         if output_path.suffix.lower() == ".json":
-            # Legacy JSON file output, unchanged.
+            # JSON is text: write_text() is correct here.
             output_path.write_text(payload, encoding="utf-8")
         else:
+            # Excel (.xlsx) is a binary ZIP file: it must NEVER be
+            # written with write_text(), which would corrupt it.
+            # export_to_excel() writes it with openpyxl's
+            # workbook.save() (binary) only.
             try:
                 created = _export_excel(records, output_path)
             except RuntimeError as exc:
