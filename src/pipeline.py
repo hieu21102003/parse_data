@@ -175,10 +175,18 @@ def process_candidate(raw_text: str, *, use_ai_fallback: bool = True,
     raw_text = (raw_text or "").strip()
     parsed = parse_standard_code(raw_text)
 
+    equivalent = parsed.get("equivalent_text")
+    equivalent_note = (
+        f" Equivalent in parentheses: {equivalent} (kept as a separate "
+        "code in text/document runs; its year is not this code's year)."
+        if equivalent else ""
+    )
+
     if parsed.get("verified"):
         return _record_from_parsed(
             raw_text, parsed, verified=True,
-            explanation="Deterministic parse passed (confidence >= 0.8); no AI correction applied.",
+            explanation="Deterministic parse passed (confidence >= 0.8); no AI correction applied."
+                        + equivalent_note,
         )
 
     if not use_ai_fallback:
@@ -190,7 +198,8 @@ def process_candidate(raw_text: str, *, use_ai_fallback: bool = True,
         detail = f" ({'; '.join(missing)})" if missing else ""
         return _record_from_parsed(
             raw_text, parsed, verified=False,
-            explanation=f"Deterministic parse below threshold (confidence < 0.8); AI fallback not enabled{detail}.",
+            explanation=f"Deterministic parse below threshold (confidence < 0.8); AI fallback not enabled{detail}."
+                        + equivalent_note,
         )
 
     # Score < 0.8 or parse failure: Gemini research / correction.
@@ -208,7 +217,7 @@ def process_candidate(raw_text: str, *, use_ai_fallback: bool = True,
                 f"AI fallback unavailable: {exc}. Set GEMINI_API_KEY in "
                 ".env (see .env.example) to enable Gemini correction; "
                 "kept deterministic result."
-            ),
+            ) + equivalent_note,
         )
     except GeminiRequestError as exc:
         return _record_from_parsed(
@@ -216,12 +225,13 @@ def process_candidate(raw_text: str, *, use_ai_fallback: bool = True,
             explanation=(
                 f"AI fallback failed (Gemini request error: {exc}); "
                 "kept deterministic result."
-            ),
+            ) + equivalent_note,
         )
     except Exception as exc:  # never let one bad candidate kill the run
         return _record_from_parsed(
             raw_text, parsed, verified=False,
-            explanation=f"AI fallback failed ({exc}); kept deterministic result.",
+            explanation=f"AI fallback failed ({exc}); kept deterministic result."
+                        + equivalent_note,
         )
 
     explanation = suggestion.get("explanation") or suggestion.get("reason", "")
@@ -250,20 +260,47 @@ def process_candidate(raw_text: str, *, use_ai_fallback: bool = True,
     )
 
 
+def _inner_codes_from_parentheticals(raw_text: str) -> list[str]:
+    """Codes inside parentheses of an outer candidate (see extractor).
+
+    The outer STANDARD_CODE_PATTERN match consumes the whole
+    compound string, so without this the equivalent code inside
+    the parentheses would never be processed as its own record.
+    """
+    inner = []
+    outer_key = re.sub(r"\s+", " ", raw_text).strip().upper()
+    for note in re.findall(r"\(([^)]*)\)", raw_text or ""):
+        for match in STANDARD_CODE_PATTERN.finditer(note):
+            code = re.sub(r"\s+", " ", match.group("code")).strip(" .;,|\t\r\n")
+            if code and re.sub(r"\s+", " ", code).strip().upper() != outer_key:
+                inner.append(code)
+    if "(" in (raw_text or "") and raw_text.count("(") > raw_text.count(")"):
+        tail = raw_text.rsplit("(", 1)[-1]
+        for match in STANDARD_CODE_PATTERN.finditer(tail):
+            code = re.sub(r"\s+", " ", match.group("code")).strip(" .;,|\t\r\n")
+            if code and re.sub(r"\s+", " ", code).strip().upper() != outer_key:
+                inner.append(code)
+    return inner
+
+
 def process_text(text: str, *, use_ai_fallback: bool = True, ai_suggester=None) -> list[dict]:
     """Extract candidates from a plain-text string and process each one."""
     seen = set()
     records = []
-    for match in STANDARD_CODE_PATTERN.finditer(text or ""):
-        raw = re.sub(r"\s+", " ", match.group("code")).strip(" .;,|\t\r\n")
-        if not raw:
-            continue
+
+    def _add(raw):
         key = re.sub(r"\s+", " ", raw).strip().upper()
-        if key in seen:
-            continue
+        if not raw or key in seen:
+            return
         seen.add(key)
         records.append(process_candidate(
             raw, use_ai_fallback=use_ai_fallback, ai_suggester=ai_suggester))
+
+    for match in STANDARD_CODE_PATTERN.finditer(text or ""):
+        raw = re.sub(r"\s+", " ", match.group("code")).strip(" .;,|\t\r\n")
+        _add(raw)
+        for inner_code in _inner_codes_from_parentheticals(raw):
+            _add(inner_code)
     return records
 
 
@@ -280,9 +317,13 @@ def process_document(file_path, *, use_ai_fallback: bool = True, ai_suggester=No
         raw = item.get("code") or item.get("raw_text") or ""
         parsed = item.get("parsed")
         if parsed is not None and parsed.get("verified"):
+            equivalent = parsed.get("equivalent_text")
             records.append(_record_from_parsed(
                 raw, parsed, verified=True,
-                explanation="Deterministic parse passed (confidence >= 0.8); no AI correction applied.",
+                explanation="Deterministic parse passed (confidence >= 0.8); no AI correction applied."
+                            + (f" Equivalent in parentheses: {equivalent} (kept as a separate "
+                               "code in text/document runs; its year is not this code's year)."
+                               if equivalent else ""),
             ))
         else:
             # Reuse process_candidate for the threshold + Gemini logic.
