@@ -137,6 +137,30 @@ records = process_candidate("ASTM D1234:2020")
 records = process_text("TCVN 1234:2020", use_ai_fallback=False)  # offline only
 ```
 
+## Excel output
+
+```bash
+PYTHONPATH=src python -m pipeline --text "TCVN 1234:2020" -o ket_qua.xlsx
+```
+
+`-o` / `--output` with a `.xlsx` path (or any non-`.json` path)
+writes a formatted Excel file via `src/exporter/excel_exporter.py`
+(using `openpyxl`) instead of JSON, and prints
+`Excel file successfully created: <path>`. With a `.json` path it
+still writes JSON, as before; with no `-o` it prints JSON to stdout.
+
+The Excel file has exactly seven columns, in this order, and no
+others (in particular no `confidence_score` or `explanation`):
+
+`Raw Text | Corrected Code | Organization | Main Number | Year | Parts | Suffix`
+
+Header: navy fill (`000080`), white bold text, centered. Data:
+left-aligned for Raw Text and Corrected Code, centered for the
+other five columns. Column widths are set from the content length
+(longest header/cell + 2, capped at 80). Empty fields (`year`,
+`parts`, `suffix` when missing) become blank cells, not the text
+`None`.
+
 ## Tests
 
 ```bash

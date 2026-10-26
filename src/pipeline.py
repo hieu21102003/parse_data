@@ -22,6 +22,9 @@ Run from the repo root, e.g.:
     PYTHONPATH=src python -m pipeline sample.docx
     PYTHONPATH=src python -m pipeline sample.pdf -o out.json
     PYTHONPATH=src python -m pipeline sample.pdf --no-ai-fallback -o out.json
+    PYTHONPATH=src python -m pipeline --text "TCVN 1234:2020" -o ket_qua.xlsx
+      # -> formatted Excel file with exactly 7 columns (see
+      # src/exporter/excel_exporter.py) and a confirmation message.
 
 ``ai_suggester`` is an injectable callable ``(raw_text) -> dict`` used
 by the tests. In production it defaults to Gemini's
@@ -332,6 +335,26 @@ def process_document(file_path, *, use_ai_fallback: bool = True, ai_suggester=No
     return records
 
 
+def _export_excel(records, output_path) -> Path:
+    """Lazy Excel export, so a missing openpyxl does not break JSON runs."""
+    try:
+        from src.exporter.excel_exporter import export_to_excel
+    except ModuleNotFoundError:
+        try:
+            from exporter.excel_exporter import export_to_excel  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError(
+                "Excel export requires openpyxl; install project dependencies "
+                "(see requirements.txt)"
+            ) from exc
+    except ImportError as exc:
+        raise RuntimeError(
+            "Excel export requires openpyxl; install project dependencies "
+            "(see requirements.txt)"
+        ) from exc
+    return export_to_excel(records, output_path)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Standard-code extraction pipeline")
     parser.add_argument("files", nargs="*", help="PDF / DOCX / Excel files to process")
@@ -342,7 +365,11 @@ def main(argv=None) -> int:
     parser.add_argument("--no-ai-fallback", action="store_true",
                         help="Do NOT call Gemini for codes with confidence < 0.8; "
                              "return the deterministic result instead (fully offline).")
-    parser.add_argument("-o", "--output", help="Write JSON to this file instead of stdout")
+    parser.add_argument("-o", "--output",
+                        help="Write results to this file instead of stdout: "
+                             ".xlsx for a formatted Excel file with exactly 7 columns "
+                             "(see src/exporter/excel_exporter.py), .json for JSON, "
+                             "any other extension is written as Excel format.")
     args = parser.parse_args(argv)
 
     # Default is Gemini ON. --no-ai-fallback wins over --use-ai-fallback.
@@ -363,7 +390,17 @@ def main(argv=None) -> int:
 
     payload = json.dumps(records, ensure_ascii=False, indent=2)
     if args.output:
-        Path(args.output).write_text(payload, encoding="utf-8")
+        output_path = Path(args.output)
+        if output_path.suffix.lower() == ".json":
+            # Legacy JSON file output, unchanged.
+            output_path.write_text(payload, encoding="utf-8")
+        else:
+            try:
+                created = _export_excel(records, output_path)
+            except RuntimeError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+            print(f"Excel file successfully created: {created}")
     else:
         print(payload)
     return 0
