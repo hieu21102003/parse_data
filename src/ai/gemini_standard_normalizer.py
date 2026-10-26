@@ -1,7 +1,12 @@
 """Gemini-backed suggestions for malformed standard codes.
 
-Suggestions are formatting/identification hypotheses. This module does not
-verify a code against an authoritative standards catalogue.
+Suggestions are formatting/identification hypotheses based on the model's
+knowledge of real standards designations. This module does not verify a
+code against an authoritative standards catalogue and does not do a live
+web/catalogue lookup, so callers must keep ``verified=False`` for any
+AI-corrected code. ``explanation`` is the pipeline-facing field name;
+it mirrors ``reason`` so the JSON output schema in docs/PIPELINE.md
+stays stable even if the Gemini schema changes.
 """
 
 import json
@@ -23,6 +28,8 @@ OUTPUT_SCHEMA = {
         "status": {"type": "STRING", "enum": ["normalized", "ambiguous", "unrecognized"]},
         "confidence": {"type": "NUMBER", "minimum": 0, "maximum": 1},
         "reason": {"type": "STRING"},
+        # Optional alias: some prompts/models fill this instead of reason.
+        "explanation": {"type": "STRING"},
     },
     "required": ["suggested_code", "alternatives", "status", "confidence", "reason"],
 }
@@ -48,10 +55,16 @@ def suggest_standard_code(raw_code: str, timeout: float = 30.0) -> dict:
 
     model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
     prompt = (
-        "Interpret this possibly malformed standards designation. Infer only a "
-        "plausible correction from the supplied text; do not claim that a code "
-        "exists or is officially valid. Preserve meaningful parts, year, and "
-        "amendment. If multiple readings are plausible, use status=ambiguous. "
+        "You are correcting a possibly malformed, incomplete, or wrongly "
+        "formatted technical standard designation. Use your knowledge of "
+        "real standards designations (TCVN, QCVN, ISO, EN, BS, IEC, ASTM, "
+        "and similar bodies) to research the most plausible correct code. "
+        "Preserve meaningful parts, year, and amendment when they are "
+        "present in the input. In 'reason'/'explanation', explain in one "
+        "or two sentences what was wrong or missing and what you changed "
+        "and why. Do not claim that a code exists or is officially valid; "
+        "the caller will keep it unverified. If multiple readings are "
+        "plausible, use status=ambiguous and list them in 'alternatives'. "
         "If there is not enough information, use status=unrecognized and an "
         "empty suggested_code. Input: " + json.dumps(raw_code, ensure_ascii=False)
     )
@@ -83,4 +96,7 @@ def suggest_standard_code(raw_code: str, timeout: float = 30.0) -> dict:
     if suggestion.get("suggested_code") and not isinstance(suggestion["suggested_code"], str):
         raise GeminiRequestError("Gemini returned an invalid suggested_code")
     suggestion["verified"] = False
+    # Pipeline output uses 'explanation'; keep it in sync with 'reason'.
+    suggestion["explanation"] = suggestion.get("explanation") or suggestion.get("reason", "")
+    suggestion["reason"] = suggestion.get("reason") or suggestion["explanation"]
     return suggestion
