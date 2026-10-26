@@ -390,6 +390,35 @@ def _extract_vietnamese_range_from_rest(rest: str):
     return parts, cleaned
 
 
+_EQUIVALENT_ORGS = (
+    "TCVN", "QCVN", "TCCS", "ISO", "IEC", "EN", "BS EN", "BS",
+    "DIN EN", "DIN", "ASTM", "JIS", "ANSI", "ASME", "IEEE",
+    "SAE", "API", "AASHTO", "AWWA", "UL", "GB",
+)
+
+
+def _version_text_is_standard_code(version_text: str) -> bool:
+    """True when a parenthetical note is itself a standard code.
+
+    E.g. ``BS EN 13146-1 đến 10:2019`` in
+    ``TCVN 13695-1 đến 10:2023 (BS EN 13146-1 đến 10:2019)`` is an
+    *equivalent* designation, not a version, part list, or year for
+    the outer code. Its main number, parts and year must never be
+    stolen as the outer code's parts/year (a previous version did
+    exactly that: it could read ``13146-1`` as parts). Such a note
+    is returned as ``equivalent_text`` instead.
+    """
+    if not version_text:
+        return False
+    upper = version_text.strip().upper()
+    if not any(c.isdigit() for c in upper):
+        return False
+    return any(
+        upper == org or upper.startswith(org + " ") or upper.startswith(org + "/")
+        for org in _EQUIVALENT_ORGS
+    )
+
+
 def parse_standard_code(raw_code: str) -> dict:
     text = normalize_text(raw_code)
 
@@ -413,6 +442,7 @@ def parse_standard_code(raw_code: str) -> dict:
         "amendment": None,
         "suffix": None,
         "version_text": None,
+        "equivalent_text": None,
 
         "confidence_score": 0.0,
         "confidence_breakdown": {},
@@ -428,6 +458,17 @@ def parse_standard_code(raw_code: str) -> dict:
     if version_match:
         result["version_text"] = version_match.group(1).strip()
         text = re.sub(r"\(.*?\)", "", text).strip()
+    elif "(" in text:
+        # Unclosed parenthetical, e.g. the user's exact string
+        # "... (BS EN 13146-1 đến 10:2019" with no closing ")".
+        # Without this, the whole equivalent note becomes a suffix
+        # and the outer code's corrected_code turns into an ugly
+        # ".../(BS EN ..." string.
+        before, _, note = text.partition("(")
+        result["version_text"] = note.strip().rstrip(")")
+        text = before.strip()
+    if _version_text_is_standard_code(result["version_text"]):
+        result["equivalent_text"] = result["version_text"]
 
     # -------------------------------------------------
     # STEP 2 — ORG + MAIN (year is optional from here on)
@@ -466,15 +507,19 @@ def parse_standard_code(raw_code: str) -> dict:
     parts, year, suffix = _parse_remainder(rest_cleaned, org_norm, org_part)
     if range_from_rest and not parts:
         parts = range_from_rest
-    if not parts:
-        # Part range/list carried only in the parenthetical note, e.g.
-        # "TCVN 13566:2022 (các phần 1-6)" -> parts ["1", "6"].
-        parts = _extract_part_range_from_version(result["version_text"])
-    if year is None:
-        # Year carried only in the parenthetical note, e.g.
-        # "TCVN 13566 (từ 1 đến 10, 2019)" -> year 2019, not null.
-        # An outside year, when present, always wins (see test).
-        year = _extract_year_from_version(result["version_text"])
+    if result["equivalent_text"] is None:
+        # Only a plain part/year note may supply the outer code's
+        # parts/year. An equivalent code in parentheses must NOT:
+        # its "13146-1" is its own main/part, not the outer code's.
+        if not parts:
+            # Part range/list carried only in the parenthetical note, e.g.
+            # "TCVN 13566:2022 (các phần 1-6)" -> parts ["1", "6"].
+            parts = _extract_part_range_from_version(result["version_text"])
+        if year is None:
+            # Year carried only in the parenthetical note, e.g.
+            # "TCVN 13566 (từ 1 đến 10, 2019)" -> year 2019, not null.
+            # An outside year, when present, always wins (see test).
+            year = _extract_year_from_version(result["version_text"])
     result["std_parts"] = parts
     result["std_part"] = ("-" + "-".join(parts)) if parts else None
     result["std_year"] = year

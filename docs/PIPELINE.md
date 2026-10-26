@@ -47,6 +47,17 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
      same. A 4-digit year inside the parentheses is the publication
      year when no year appears outside them (it is not dropped to
      `null`); an outside year, when present, wins.
+   - Compound code with an equivalent in parentheses:
+     `TCVN 13695-1 đến 10:2023 (BS EN 13146-1 đến 10:2019)` is
+     TWO codes, not one. Text/document runs emit both records:
+     `TCVN 13695-1-10:2023` and `EN 13146-1-10:2019` (BS EN
+     normalises to EN), each with its own range and year. The
+     hyphen-part plus `đến` rule applies per code (`-1 đến 10`
+     -> `1-10`, never `1` alone), the equivalent's numbers are
+     never stolen as the outer code's parts/year, and an unclosed
+     trailing parenthesis is handled the same way. A single
+     `process_candidate` call on the whole string keeps the outer
+     code correct and names the equivalent in `explanation`.
 
 3. **Gemini fallback** — `src/ai/gemini_standard_normalizer.py`
    - Triggered for score < 0.8 or a parse failure, and enabled by
@@ -70,7 +81,11 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
      `reason`/`explanation`. It now also covers `từ X đến Y` /
      `-X đến Y` (both endpoints, e.g. `1-10`, never just `1`) and a
      year inside the parentheses (e.g. `(từ 1 đến 10, 2019)` ->
-     year 2019, stated as taken from the parenthetical note). The
+     year 2019, stated as taken from the parenthetical note), and
+     compound equivalents (`TCVN 13695-1 đến 10:2023 (BS EN
+     13146-1 đến 10:2019)` -> main code `TCVN 13695-1-10:2023`,
+     equivalent `BS EN 13146-1-10:2019` in `alternatives` and in
+     `reason`/`explanation`, each code keeping its own year). The
      JSON `OUTPUT_SCHEMA` is unchanged (same fields, same required
      list).
    - Configure with `.env` (see `.env.example`):

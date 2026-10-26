@@ -55,6 +55,33 @@ def _text(value) -> str:
     return str(value).replace("\xa0", " ").strip()
 
 
+def _inner_codes_from_parentheticals(raw_code: str) -> list[str]:
+    """Codes hidden inside parentheses of an outer match.
+
+    E.g. ``TCVN 13695-1 đến 10:2023 (BS EN 13146-1 đến 10:2019)``
+    is two codes, not one: the outer match consumes the whole
+    string, so without this the BS EN code (and its year 2019)
+    would never be emitted as its own record. Closed and unclosed
+    parentheticals are both handled; the outer code itself is
+    never returned here.
+    """
+    inner = []
+    outer_key = re.sub(r"\s+", " ", raw_code).strip().upper()
+    for note in re.findall(r"\(([^)]*)\)", raw_code):
+        for match in STANDARD_CODE_PATTERN.finditer(note):
+            code = re.sub(r"\s+", " ", match.group("code")).strip(" .;,|\t\r\n")
+            if code and re.sub(r"\s+", " ", code).strip().upper() != outer_key:
+                inner.append(code)
+    # Unclosed trailing parenthetical: "(BS EN ... 2019" with no ")".
+    if "(" in raw_code and raw_code.count("(") > raw_code.count(")"):
+        tail = raw_code.rsplit("(", 1)[-1]
+        for match in STANDARD_CODE_PATTERN.finditer(tail):
+            code = re.sub(r"\s+", " ", match.group("code")).strip(" .;,|\t\r\n")
+            if code and re.sub(r"\s+", " ", code).strip().upper() != outer_key:
+                inner.append(code)
+    return inner
+
+
 def _extract_from_text(text: str, source: dict, use_ai_fallback: bool) -> list[dict]:
     found = []
     for match in STANDARD_CODE_PATTERN.finditer(text or ""):
@@ -67,6 +94,15 @@ def _extract_from_text(text: str, source: dict, use_ai_fallback: bool) -> list[d
             else parse_standard_code(raw_code)
         )
         found.append({"code": raw_code, **source, "parsed": parsed})
+        # Emit the equivalent code(s) inside the parentheses as
+        # their own records, with their own range and year intact.
+        for inner_code in _inner_codes_from_parentheticals(raw_code):
+            inner_parsed = (
+                parse_standard_code_with_ai_fallback(inner_code)
+                if use_ai_fallback
+                else parse_standard_code(inner_code)
+            )
+            found.append({"code": inner_code, **source, "parsed": inner_parsed})
     return found
 
 
