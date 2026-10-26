@@ -74,8 +74,19 @@ def export_to_excel(records, output_path) -> Path:
     path so the CLI can confirm it to the user.
     """
     path = Path(output_path)
-    if path.parent and str(path.parent) not in ("", "."):
-        path.parent.mkdir(parents=True, exist_ok=True)
+    # Same parent-directory rule as pipeline._ensure_parent_dir:
+    # a plain relative name (parent ".") is written straight into
+    # the current directory; a path with a directory (e.g.
+    # output/ket_qua.xlsx) has that directory created first, so
+    # workbook.save() never fails with FileNotFoundError just
+    # because the folder is new. No hardcoded /tmp path is used.
+    if str(path.parent) not in ("", "."):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Could not create output directory {path.parent}: {exc}"
+            ) from exc
 
     workbook = Workbook()
     sheet = workbook.active
@@ -103,5 +114,8 @@ def export_to_excel(records, output_path) -> Path:
     for col_index, width in enumerate(_column_widths(records), start=1):
         sheet.column_dimensions[get_column_letter(col_index)].width = width
 
+    # Binary write only: a .xlsx file is a ZIP archive, so it must
+    # never be written with write_text() (text mode corrupts it).
+    # workbook.save() writes the binary format.
     workbook.save(path)
     return path

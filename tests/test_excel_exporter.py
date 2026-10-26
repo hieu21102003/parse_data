@@ -143,3 +143,52 @@ def test_cli_output_json_still_writes_json(tmp_path, capsys):
     assert payload[0]["corrected_code"] == "TCVN 1234:2020"
     # JSON output keeps the full JSON record, including confidence.
     assert payload[0]["confidence_score"] == 0.8
+
+
+def test_cli_relative_filename_goes_to_current_directory(tmp_path, monkeypatch, capsys):
+    # Regression for the Windows FileNotFoundError report: a plain
+    # relative name must be written straight into the directory
+    # the user ran the command from, with no hardcoded /tmp path.
+    monkeypatch.chdir(tmp_path)
+    assert main(["--text", "TCVN 1234:2020", "-o", "ket_qua.xlsx"]) == 0
+    assert "Excel file successfully created:" in capsys.readouterr().out
+    path = tmp_path / "ket_qua.xlsx"
+    assert path.exists()
+    sheet = load_workbook(path).active
+    assert [cell.value for cell in sheet[2]][1] == "TCVN 1234:2020"
+
+
+def test_cli_nested_directory_is_created_for_excel(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    assert not (tmp_path / "output").exists()
+    assert main(["--text", "TCVN 1234:2020", "-o", "output/ket_qua.xlsx"]) == 0
+    path = tmp_path / "output" / "ket_qua.xlsx"
+    assert path.exists()
+    sheet = load_workbook(path).active
+    assert sheet.max_column == 7
+
+
+def test_cli_nested_directory_is_created_for_json(tmp_path, monkeypatch):
+    # Previously this raised FileNotFoundError: write_text() does
+    # not create parent directories.
+    monkeypatch.chdir(tmp_path)
+    assert main(["--text", "TCVN 1234:2020", "-o", "output/out.json"]) == 0
+    path = tmp_path / "output" / "out.json"
+    assert json.loads(path.read_text(encoding="utf-8"))[0]["year"] == 2020
+
+
+def test_excel_file_is_binary_zip_not_text(tmp_path):
+    path = tmp_path / "ket_qua.xlsx"
+    export_to_excel(RECORDS, path)
+    data = path.read_bytes()
+    assert data[:2] == b"PK"  # ZIP magic: a real .xlsx file
+    assert not data.startswith(b"[")  # never JSON text via write_text()
+    # And it must still open as a workbook.
+    assert load_workbook(path).active.max_column == 7
+
+
+def test_exporter_directly_creates_nested_directory(tmp_path):
+    path = tmp_path / "a" / "b" / "ket_qua.xlsx"
+    export_to_excel(RECORDS, path)
+    assert path.exists()
+    assert load_workbook(path).active.max_row == 3

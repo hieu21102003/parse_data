@@ -149,6 +149,25 @@ writes a formatted Excel file via `src/exporter/excel_exporter.py`
 `Excel file successfully created: <path>`. With a `.json` path it
 still writes JSON, as before; with no `-o` it prints JSON to stdout.
 
+Output paths:
+- A plain relative name (`-o ket_qua.xlsx`) is written straight
+  into the current directory where the command was run. There is
+  no hardcoded `/tmp` path anywhere: on Windows do NOT copy a
+  `/tmp/ket_qua.xlsx` example as `\tmp\ket_qua.xlsx` -- that is
+  the root of the current drive, not the current directory, and
+  may not exist or may not be writable. Use `ket_qua.xlsx` or
+  `output\ket_qua.xlsx` instead.
+- A path with a directory (`-o output/ket_qua.xlsx`) has its
+  parent directory created first
+  (`Path(args.output).parent.mkdir(parents=True, exist_ok=True)`
+  in `pipeline.py`, and the same in the exporter), so it no
+  longer fails with FileNotFoundError just because the folder
+  is new. This applies to both Excel and JSON output.
+- Excel is written as binary only (`workbook.save()`), never
+  with `write_text()`: a `.xlsx` file is a ZIP archive, and
+  writing it as text corrupts it. JSON output, being text,
+  correctly keeps `write_text()`.
+
 The Excel file has exactly seven columns, in this order, and no
 others (in particular no `confidence_score` or `explanation`):
 
