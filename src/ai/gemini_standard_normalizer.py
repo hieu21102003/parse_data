@@ -53,7 +53,7 @@ def suggest_standard_code(raw_code: str, timeout: float = 30.0) -> dict:
     if not api_key:
         raise GeminiConfigurationError("GEMINI_API_KEY is not configured")
 
-    model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
     prompt = (
         "You are correcting a possibly malformed, incomplete, or wrongly "
         "formatted technical standard designation. Use your knowledge of "
@@ -70,6 +70,8 @@ def suggest_standard_code(raw_code: str, timeout: float = 30.0) -> dict:
     )
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
+        # Bật công cụ Google Search để Gemini tự động đi search web khi cần
+        "tools": [{"googleSearch": {}}],
         "generationConfig": {
             "responseMimeType": "application/json",
             "responseSchema": OUTPUT_SCHEMA,
