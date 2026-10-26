@@ -53,7 +53,7 @@ def suggest_standard_code(raw_code: str, timeout: float = 30.0) -> dict:
     if not api_key:
         raise GeminiConfigurationError("GEMINI_API_KEY is not configured")
 
-    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
     prompt = (
         "You are correcting a possibly malformed, incomplete, or wrongly "
         "formatted technical standard designation. Use your knowledge of "
@@ -66,12 +66,36 @@ def suggest_standard_code(raw_code: str, timeout: float = 30.0) -> dict:
         "the caller will keep it unverified. If multiple readings are "
         "plausible, use status=ambiguous and list them in 'alternatives'. "
         "If there is not enough information, use status=unrecognized and an "
-        "empty suggested_code. Input: " + json.dumps(raw_code, ensure_ascii=False)
+        "empty suggested_code. "
+        "IMPORTANT - parenthetical notes in Vietnamese: do NOT drop a "
+        "parenthetical note, and do NOT mistake it for a version. "
+        "A note such as '(các phần 1-6)', '(phần 1 đến 3)', "
+        "'(phần 1-3)', '(các phần 1, 3, 5)' or '(parts 1-6)' is a "
+        "PART RANGE / PART LIST, not a version or amendment: 'các phần' "
+        "means 'parts', 'phần' means 'part', and 'đến' means 'to'. "
+        "For such an input, normalise the parts field to the range, "
+        "e.g. input 'TCVN 13566:2022 (các phần 1-6)' -> parts '1-6' "
+        "and suggested_code 'TCVN 13566-1-6:2022'; input "
+        "'TCVN 1234:2020 (phần 1 đến 3)' -> parts '1-3' and "
+        "suggested_code 'TCVN 1234-1-3:2020'. If a range cannot be "
+        "encoded cleanly as hyphenated parts, keep the note verbatim "
+        "in suggested_code, e.g. 'TCVN 13566:2022 (các phần 1-6)', "
+        "and in every case state the range explicitly in "
+        "'reason'/'explanation', e.g. 'parenthetical note is a part "
+        "range 1-6, not a version'. Never return the bare code "
+        "'TCVN 13566:2022' for such an input, because that loses the "
+        "parts. By contrast, a note such as '(rev 1)', '(version 2)' "
+        "or '(bản sửa đổi 1)' IS a version/amendment: do not turn it "
+        "into parts, and mention it in 'reason'/'explanation' if you "
+        "keep it. "
+        "Return ONLY JSON matching the provided schema, with exactly "
+        "these fields and no extra fields: suggested_code, alternatives, "
+        "status, confidence, reason, and optionally explanation "
+        "(explanation must mirror reason). Input: "
+        + json.dumps(raw_code, ensure_ascii=False)
     )
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
-        # Bật công cụ Google Search để Gemini tự động đi search web khi cần
-        "tools": [{"googleSearch": {}}],
         "generationConfig": {
             "responseMimeType": "application/json",
             "responseSchema": OUTPUT_SCHEMA,

@@ -318,6 +318,35 @@ def compute_confidence(result: dict):
 # -------------------------------------------------
 # MAIN PARSER
 # -------------------------------------------------
+def _extract_part_range_from_version(version_text: str) -> list[str]:
+    """Extract a part range/list from a parenthetical note, or [].
+
+    Real lists write e.g. ``TCVN 13566:2022 (các phần 1-6)`` or
+    ``TCVN 1234:2020 (phần 1 đến 3)``. The note is *not* a version:
+    it says which parts the document covers, so dropping it loses
+    information. When a part keyword (phần/part) is present, a
+    ``1-6`` / ``1 đến 3`` / ``1 to 3`` range becomes ``["1", "6"]``
+    (pipeline output joins it back to ``"1-6"``), and a list such as
+    ``các phần 1, 3, 5`` becomes ``["1", "3", "5"]``. A bare ``1-6``
+    with no keyword is also treated as a part range. Notes such as
+    ``(rev 1)`` or ``(version 2)`` return [] and stay version_text.
+    """
+    if not version_text:
+        return []
+    text = version_text.strip().lower()
+    has_part_keyword = "phần" in text or "part" in text
+    range_match = re.search(r"(\d+)\s*(?:-|–|—|đến|to)\s*(\d+)", text)
+    if range_match and (
+        has_part_keyword
+        or re.fullmatch(r"\s*\d+\s*(?:-|–|—)\s*\d+\s*", text)
+    ):
+        return [range_match.group(1), range_match.group(2)]
+    if has_part_keyword:
+        numbers = [n for n in re.findall(r"\d+", text) if not _is_year_token(n)]
+        return numbers
+    return []
+
+
 def parse_standard_code(raw_code: str) -> dict:
     text = normalize_text(raw_code)
 
@@ -389,6 +418,10 @@ def parse_standard_code(raw_code: str) -> dict:
     # STEP 3 — PARTS / YEAR / SUFFIX
     # -------------------------------------------------
     parts, year, suffix = _parse_remainder(rest, org_norm, org_part)
+    if not parts:
+        # Part range/list carried only in the parenthetical note, e.g.
+        # "TCVN 13566:2022 (các phần 1-6)" -> parts ["1", "6"].
+        parts = _extract_part_range_from_version(result["version_text"])
     result["std_parts"] = parts
     result["std_part"] = ("-" + "-".join(parts)) if parts else None
     result["std_year"] = year
@@ -444,12 +477,36 @@ def parse_standard_code_with_ai_fallback(raw_code: str) -> dict:
         return result
 
     try:
-        from src.ai.gemini_standard_normalizer import suggest_standard_code
+        from src.ai.gemini_standard_normalizer import (
+            GeminiConfigurationError,
+            GeminiRequestError,
+            suggest_standard_code,
+        )
     except ModuleNotFoundError:
         # Support running with src/ itself on PYTHONPATH as the existing tests do.
-        from ai.gemini_standard_normalizer import suggest_standard_code
+        from ai.gemini_standard_normalizer import (  # type: ignore
+            GeminiConfigurationError,
+            GeminiRequestError,
+            suggest_standard_code,
+        )
 
-    suggestion = suggest_standard_code(raw_code)
+    try:
+        suggestion = suggest_standard_code(raw_code)
+    except (GeminiConfigurationError, GeminiRequestError) as exc:
+        # Do not crash the caller on a missing key or a network/API
+        # failure: report it in ai_fallback instead.
+        result["verified"] = False
+        result["ai_fallback"] = {
+            "used": True,
+            "suggestion": None,
+            "status": "error",
+            "confidence": 0.0,
+            "reason": str(exc),
+            "explanation": str(exc),
+            "alternatives": [],
+            "verified": False,
+        }
+        return result
     candidate = suggestion.get("suggested_code")
     explanation = suggestion.get("explanation") or suggestion.get("reason", "")
     ai_meta = {

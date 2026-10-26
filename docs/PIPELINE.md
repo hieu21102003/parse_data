@@ -36,17 +36,32 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
      stays unverified with `year: null` and an explanation saying
      the year is missing in the source. That is not a parser failure:
      filling the year needs Gemini research or the source document.
+   - A parenthetical part note is not discarded: `TCVN 13566:2022
+     (các phần 1-6)` gives `parts: "1-6"`, `TCVN 1234:2020 (phần 1
+     đến 3)` gives `parts: "1-3"`, while `(rev 1)` stays version
+     text only and does not become a part.
 
 3. **Gemini fallback** — `src/ai/gemini_standard_normalizer.py`
-   - Triggered only for score < 0.8 or a parse failure, and only when
-     the caller enables it (`use_ai_fallback=True`).
+   - Triggered for score < 0.8 or a parse failure, and enabled by
+     default: `process_candidate` / `process_document` /
+     `process_text` call `suggest_standard_code(raw_text)` directly
+     unless the caller passes `use_ai_fallback=False` (CLI:
+     `--no-ai-fallback`). `--use-ai-fallback` is kept for
+     compatibility and is now a no-op (the default is already on).
    - Gemini is asked, from its knowledge of real standards designations,
      for the most plausible correction plus a `reason`/`explanation`.
      It is **not** a live catalogue lookup, so the result always stays
      `verified=False`.
-   - If Gemini is unconfigured or fails, the pipeline keeps the
-     deterministic result, `verified=False`, and records the failure
+   - If Gemini is unconfigured (`GeminiConfigurationError`, e.g. no
+     `GEMINI_API_KEY`) or the request fails (`GeminiRequestError`,
+     e.g. network/API error), the pipeline keeps the deterministic
+     result, `verified=False`, and records a clear, distinct error
      in `explanation` instead of crashing.
+   - The Gemini prompt also tells the model to treat Vietnamese
+     parenthetical part notes (`các phần 1-6`, `phần 1 đến 3`) as a
+     part range, not a version, and to state the range in
+     `reason`/`explanation`. The JSON `OUTPUT_SCHEMA` is unchanged
+     (same fields, same required list).
    - Configure with `.env` (see `.env.example`):
      `GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-3.8-flash`).
 
@@ -81,8 +96,9 @@ output is JSON-serialisable (the parser internally uses `Decimal`).
 ```bash
 pip install -r requirements.txt
 PYTHONPATH=src python -m pipeline sample.docx
-PYTHONPATH=src python -m pipeline sample.pdf sample.xlsx --use-ai-fallback -o out.json
-PYTHONPATH=src python -m pipeline --text "See TCVN 1234:2020." --use-ai-fallback
+PYTHONPATH=src python -m pipeline sample.pdf sample.xlsx -o out.json
+PYTHONPATH=src python -m pipeline --text "See TCVN 1234:2020."
+PYTHONPATH=src python -m pipeline sample.pdf --no-ai-fallback -o out.json
 ```
 
 Python API:
@@ -90,9 +106,9 @@ Python API:
 ```python
 from pipeline import process_document, process_candidate, process_text
 
-records = process_document("sample.docx", use_ai_fallback=True)
-records = process_candidate("ASTM D1234:2020", use_ai_fallback=True)
-records = process_text("TCVN 1234:2020", use_ai_fallback=False)
+records = process_document("sample.docx")  # Gemini fallback on by default
+records = process_candidate("ASTM D1234:2020")
+records = process_text("TCVN 1234:2020", use_ai_fallback=False)  # offline only
 ```
 
 ## Tests
