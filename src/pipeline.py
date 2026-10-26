@@ -80,6 +80,8 @@ def build_canonical_code(parsed: dict) -> str | None:
     org = parsed.get("org_normalized") or parsed.get("org_prefix")
     parts = parsed.get("std_parts") or []
     code = f"{main}-{ '-'.join(parts)}" if parts else str(main)
+    if parsed.get("series_letter"):
+        code = f"{parsed['series_letter']} {code}"
     if org:
         code = f"{org} {code}"
     year = parsed.get("std_year")
@@ -87,7 +89,12 @@ def build_canonical_code(parsed: dict) -> str | None:
         code = f"{code}:{year}"
     suffix = parsed.get("suffix")
     if suffix:
-        code = f"{code}/{suffix}"
+        # Suffixes that already carry their own separator (+A1, -02)
+        # must not get an extra "/".
+        if suffix.startswith(("-", "+")):
+            code = f"{code}{suffix}"
+        else:
+            code = f"{code}/{suffix}"
     return code
 
 
@@ -135,9 +142,15 @@ def process_candidate(raw_text: str, *, use_ai_fallback: bool = False,
         )
 
     if not use_ai_fallback:
+        missing = []
+        if parsed.get("std_year") is None:
+            missing.append("year missing in source")
+        if parsed.get("std_main_number") is None:
+            missing.append("could not parse main number")
+        detail = f" ({'; '.join(missing)})" if missing else ""
         return _record_from_parsed(
             raw_text, parsed, verified=False,
-            explanation="Deterministic parse below threshold (confidence < 0.8); AI fallback not enabled.",
+            explanation=f"Deterministic parse below threshold (confidence < 0.8); AI fallback not enabled{detail}.",
         )
 
     # Score < 0.8 or parse failure: Gemini research / correction.

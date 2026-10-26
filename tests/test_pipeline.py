@@ -47,10 +47,9 @@ def test_verified_with_parts_and_suffix():
 
 
 def test_low_confidence_without_ai_stays_unverified():
-    # Heuristic org (QCVN is not in ORG_MAP, 0.7) -> 0.14 + 0.3 + 0.3 = 0.74 < 0.8.
-    # Note: "ASTM D1234:2020" is a different case -- it fails the deterministic
-    # regex entirely (0.0) because a letter is attached to the number.
-    record = process_candidate("QCVN 1234:2020", use_ai_fallback=False)
+    # Heuristic org (XYZ is not in ORG_MAP, 0.7) -> 0.14 + 0.3 + 0.3 = 0.74 < 0.8.
+    # QCVN is now a known org, so it would score 0.8 and verify.
+    record = process_candidate("XYZ 1234:2020", use_ai_fallback=False)
     assert record["confidence_score"] == 0.74
     assert record["verified"] is False
     assert "AI fallback not enabled" in record["explanation"]
@@ -59,19 +58,19 @@ def test_low_confidence_without_ai_stays_unverified():
 def test_low_confidence_with_fake_ai_correction():
     def fake_suggester(raw):
         return {
-            "suggested_code": "QCVN 1234:2020",
+            "suggested_code": "XYZ 1234:2020",
             "status": "normalized",
             "confidence": 0.9,
-            "reason": "Confirmed the QCVN designation and canonical spacing.",
-            "explanation": "Confirmed the QCVN designation and canonical spacing.",
+            "reason": "Confirmed the XYZ designation and canonical spacing.",
+            "explanation": "Confirmed the XYZ designation and canonical spacing.",
             "alternatives": [],
         }
 
     record = process_candidate(
-        "QCVN 1234:2020", use_ai_fallback=True, ai_suggester=fake_suggester)
+        "XYZ 1234:2020", use_ai_fallback=True, ai_suggester=fake_suggester)
     assert record["verified"] is False  # AI results are never verified
-    assert record["explanation"].startswith("Confirmed the QCVN")
-    assert record["corrected_code"] == "QCVN 1234:2020"
+    assert record["explanation"].startswith("Confirmed the XYZ")
+    assert record["corrected_code"] == "XYZ 1234:2020"
 
 
 def test_ai_failure_does_not_crash():

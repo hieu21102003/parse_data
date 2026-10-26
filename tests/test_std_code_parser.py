@@ -74,9 +74,17 @@ def test_normalize_org_en_iso():
 
 
 def test_normalize_org_heuristic():
-    org, conf = normalize_org("ASTM D")
-    assert org == "ASTM"
+    # ASTM is now a known org (see ORG_MAP), so the heuristic case uses
+    # a genuinely unknown body instead of "ASTM D".
+    org, conf = normalize_org("XYZ Q")
+    assert org == "XYZ"
     assert conf == 0.7
+
+
+def test_normalize_org_astm_exact():
+    org, conf = normalize_org("ASTM")
+    assert org == "ASTM"
+    assert conf == 1.0
 
 
 def test_normalize_org_unknown():

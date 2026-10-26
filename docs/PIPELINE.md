@@ -22,6 +22,20 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
      0.8, while a heuristic org with main + year only scores 0.74.
    - `confidence_score >= 0.8` (and main + year present) =>
      `verified=True`, no Gemini call.
+   - Year is optional in the parser (it was previously required after
+     a colon, which made most real-world codes score 0.0). Year may
+     come after `:`, `-`, `/`, or a space, and parts are hyphen
+     groups that are not a year. Supported real-world forms include
+     no-space org-number (`IEC62278:2002`), series letters
+     (`JIS E 1102`, `ASTM C 665`, `JISC1731-2`), decimal mains
+     (`IEEE 802.11`, `ASME B1.20.7`), and short edition years only
+     for ASTM/AASHTO/GBJ (`ASTM D 4719-07` -> 2007, `AASHTO T27-99`
+     -> 1999). For other bodies a trailing 2-digit group is a part
+     (`JIS B8009-12`, `EN 301489-18`), not a year.
+   - A code with no year in the source can score at most 0.7, so it
+     stays unverified with `year: null` and an explanation saying
+     the year is missing in the source. That is not a parser failure:
+     filling the year needs Gemini research or the source document.
 
 3. **Gemini fallback** — `src/ai/gemini_standard_normalizer.py`
    - Triggered only for score < 0.8 or a parse failure, and only when
