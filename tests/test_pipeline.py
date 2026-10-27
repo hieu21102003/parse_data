@@ -154,12 +154,7 @@ def test_process_docx_and_xlsx(tmp_path):
 
     docx_path = tmp_path / "sample.docx"
     doc = Document()
-    # Note: this test is about DOCX/XLSX processing, not about
-    # expansion, so it uses a single-part code here. A bare
-    # "7447-4-41" code would now expand to 4..41 under the
-    # bare-range rule; that behaviour is covered explicitly in
-    # test_expand_parts instead.
-    doc.add_paragraph("Applicable: TCVN 1234:2020, and TCVN 7447-4:2010.")
+    doc.add_paragraph("Applicable: TCVN 1234:2020, and TCVN 7447-4-41:2010.")
     doc.save(str(docx_path))
 
     xlsx_path = tmp_path / "sample.xlsx"
@@ -168,7 +163,7 @@ def test_process_docx_and_xlsx(tmp_path):
 
     docx_records = process_document(str(docx_path))
     assert {r["corrected_code"] for r in docx_records} == {
-        "TCVN 1234:2020", "TCVN 7447-4:2010"}
+        "TCVN 1234:2020", "TCVN 7447-4-41:2010"}
     assert all(r["verified"] for r in docx_records)
 
     xlsx_records = process_document(str(xlsx_path))

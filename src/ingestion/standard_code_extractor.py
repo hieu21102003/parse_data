@@ -24,6 +24,13 @@ _STANDARD_CODE_CORE = (
     r"IEC|EN(?:\s+ISO)?|BS(?:\s+EN)?|ASTM|JIS|DIN|ANSI|ASME|IEEE|"
     r"SAE|API|AASHTO|AWWA|UL|GB|ГОСТ)\s*[-:]?\s*"
     r"(?:[A-Z]{1,6}\s*)?\d{1,6}(?:[./-]\d{1,6})*"
+    # Optional comma list after the first part, e.g.
+    # "TCVN 13566-1,2,3,4,5:2022" or "1, 2, 3, 4 và 5".
+    # Each comma number is 1-3 digits followed by a non-digit,
+    # so a 4-digit year after a comma (", 2020") is never
+    # swallowed as a part, and a comma followed by another code
+    # ("-1, TCVN ...") does not match at all.
+    r"(?:\s*,\s*\d{1,3}(?!\d)(?:\s*(?:,|và|and)\s*\d{1,3}(?!\d))*)?"
     r"(?:\s*:\s*\d{4})?(?:\s*/\s*[A-Z0-9Đ-]+(?::\s*\d{4})?)?"
     r"(?:\s*\+\s*(?:AMD|A)\s*\d+(?::\d{4})?)?"
     # Optional Vietnamese range outside parentheses, e.g.
