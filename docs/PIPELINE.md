@@ -97,7 +97,10 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
      (leading hyphen = range start) are full ranges, not single
      parts: `TCVN 13566 (từ 1 đến 10, 2019)` gives `parts: "1-10"`
      and `year: 2019`, and `TCVN 13566 từ 1 đến 10:2019` gives the
-     same. A 4-digit year inside the parentheses is the publication
+     same. The part keyword may sit on either side of such a
+     range -- `(từ phần 1 đến 10)`, `(từ 1 đến phần 10)`,
+     `(từ phần 1 đến phần 10)` -- and the separator may be a
+     hyphen (`từ 1 - 10`); all are the same range. A 4-digit year inside the parentheses is the publication
      year when no year appears outside them (it is not dropped to
      `null`); an outside year, when present, wins.
    - Compound code with an equivalent in parentheses:

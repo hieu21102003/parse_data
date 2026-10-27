@@ -61,12 +61,22 @@ STANDARD_CODE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# A parenthetical note is a part range/list (kept, for the parser)
+# when it matches one of the forms below. The "từ" forms must
+# allow the part keyword on either side of the range -- "từ
+# phần 1 đến 10", "từ 1 đến phần 10", "từ phần 1 đến phần
+# 10" -- and a hyphen separator ("từ 1 - 10"): the parser
+# already understands all of these, but this pattern used to
+# reject them, so clean_code_candidate() stripped the whole
+# note before the parser ever saw it and the parts were lost.
+# Endpoints stay 1-3 digits so a date range such as "từ 2020
+# đến 2025" is still rejected here (its endpoints are years).
 _PART_NOTE = re.compile(
     r"(?:"
-    r"(?:các\s+)?phần(?:\s+từ)?\s*-?\s*\d{1,3}"
+    r"(?:(?:từ|from)\s+)?(?:các\s+)?phần(?:\s+từ)?\s*-?\s*\d{1,3}"
     r"(?:\s*(?:-|đến|tới|to|,|và)\s*(?:phần\s*)?\d{1,4})*"
-    r"|parts?\s*-?\s*\d{1,3}(?:\s*(?:-|to|,|and)\s*\d{1,4})*"
-    r"|(?:từ|from)\s*-?\s*\d{1,3}\s*(?:đến|tới|to)\s*\d{1,3}"
+    r"|(?:from\s+)?parts?\s*-?\s*\d{1,3}(?:\s*(?:-|to|,|and)\s*(?:part\s*)?\d{1,4})*"
+    r"|(?:từ|from)\s*(?:(?:phần|part)\s*)?-?\s*\d{1,3}\s*(?:-|–|—|đến|tới|to)\s*(?:(?:phần|part)\s*)?\d{1,3}"
     r"(?:\s*[,;]\s*(?:19|20|21)\d{2})?"
     r"|(?:rev(?:ision)?|version|bản\s+sửa\s+đổi|amendment)\s*[\w.-]+"
     r"|(?:19|20|21)\d{2}"
