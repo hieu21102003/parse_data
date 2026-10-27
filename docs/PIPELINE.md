@@ -17,6 +17,18 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
    - `raw_text` keeps the matched code and recognized short notes (parts,
      year, version, or equivalent code). Descriptive parentheticals are
      excluded from the code text; codes inside them are extracted separately.
+   - `raw_text` is guaranteed to be exactly one cleaned matched code,
+     never a whole row, paragraph or cell string: tables are scanned
+     cell by cell (never joined with `" | "`), the extractor emits
+     only `clean_code_candidate(match)` as `"code"`, `process_document`
+     never falls back to a `raw_text` field, and `process_candidate` /
+     `_record_from_parsed` re-extract the first cleaned code from any
+     input that contains one (see `extract_first_clean_code`).
+     A trailing `/<word>` that is not a real suffix (e.g. `/ Ti` from
+     `/ Tiêu chuẩn…`) is stripped in the extractor, and a multi-word
+     suffix in the parser is dropped instead of becoming
+     `corrected_code`. Only when no code matches at all is the
+     stripped input kept, so a malformed candidate stays visible.
 
 2. **Deterministic parsing** — `src/parsers/std_code_parser.py`
    - Weights: org 0.2, main number 0.3, year 0.3, parts 0.1, suffix 0.1.

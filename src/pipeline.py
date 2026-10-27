@@ -46,6 +46,7 @@ try:
         STANDARD_CODE_BASE_PATTERN,
         STANDARD_CODE_PATTERN,
         clean_code_candidate,
+        extract_first_clean_code,
         extract_standard_codes,
     )
     from src.parsers.std_code_parser import parse_standard_code
@@ -54,6 +55,7 @@ except ModuleNotFoundError:  # running with src/ itself on PYTHONPATH
         STANDARD_CODE_BASE_PATTERN,
         STANDARD_CODE_PATTERN,
         clean_code_candidate,
+        extract_first_clean_code,
         extract_standard_codes,
     )
     from parsers.std_code_parser import parse_standard_code  # type: ignore
@@ -156,6 +158,19 @@ def _default_ai_suggester(raw_text: str) -> dict:
 
 def _record_from_parsed(raw_text: str, parsed: dict, *, verified: bool,
                         explanation: str, corrected_code=None) -> dict:
+    # Guarantee point for raw_text: the output record's raw_text is
+    # always exactly one cleaned matched code, never a row, paragraph
+    # or cell string that happened to contain a code. If the input
+    # contains a standard-code match, it is replaced by that cleaned
+    # match here, even if a caller passed the surrounding text in.
+    # Only when no code matches at all (a malformed candidate such
+    # as an unknown org) is the stripped input kept, so the failure
+    # itself is still visible instead of being silently dropped.
+    # Because raw_text is clean by this point, the corrected_code
+    # fallback below (``or raw_text``) can never echo a whole row.
+    cleaned = extract_first_clean_code(raw_text) if raw_text else None
+    if cleaned:
+        raw_text = cleaned
     parts_list = parsed.get("std_parts") or []
     parts = "-".join(parts_list) if parts_list else None
     # std_part keeps the leading-dash form ("-1-2"); prefer the clean join.
@@ -180,8 +195,21 @@ def _record_from_parsed(raw_text: str, parsed: dict, *, verified: bool,
 
 def process_candidate(raw_text: str, *, use_ai_fallback: bool = True,
                       ai_suggester=None) -> dict:
-    """Process one candidate string through parse -> (optional) Gemini -> JSON."""
+    """Process one candidate string through parse -> (optional) Gemini -> JSON.
+
+    ``raw_text`` here must be a code, but callers sometimes pass a
+    whole row or paragraph string by mistake. To make that harmless,
+    the first cleaned standard-code match in the input (if any) is
+    extracted and used as the candidate from here on, so both
+    ``raw_text`` and the parser input are just the code, never the
+    surrounding description. The Gemini suggester therefore also
+    receives only the code. When no code matches, the stripped
+    input is kept as-is so a malformed candidate is not lost.
+    """
     raw_text = (raw_text or "").strip()
+    cleaned = extract_first_clean_code(raw_text)
+    if cleaned:
+        raw_text = cleaned
     parsed = parse_standard_code(raw_text)
 
     equivalent = parsed.get("equivalent_text")
@@ -324,7 +352,14 @@ def process_document(file_path, *, use_ai_fallback: bool = True, ai_suggester=No
     candidates = extract_standard_codes(file_path, use_ai_fallback=False)
     records = []
     for item in candidates:
-        raw = item.get("code") or item.get("raw_text") or ""
+        # Only the extractor's cleaned "code" field is ever used.
+        # There is deliberately NO fallback to a "raw_text" field:
+        # a fallback here is exactly how a whole row/paragraph
+        # string used to become the output raw_text. Items without
+        # a cleaned code are skipped, not emitted with row text.
+        raw = item.get("code") or ""
+        if not raw:
+            continue
         parsed = item.get("parsed")
         if parsed is not None and parsed.get("verified"):
             equivalent = parsed.get("equivalent_text")
