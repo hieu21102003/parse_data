@@ -61,25 +61,92 @@ _PART_NOTE = re.compile(
 )
 
 
+def _strip_invalid_slash_suffix(raw_code: str) -> str:
+    """Strip a trailing ``/<word>`` that is not a real suffix.
+
+    The extractor pattern's suffix group (``/<token>``) is
+    case-insensitive, so a description that follows a code in the
+    same cell -- ``TCVN 13594-1:2022 / Tiêu chuẩn về bê tông`` --
+    used to be captured as ``TCVN 13594-1:2022 / Ti`` (the token
+    stops at the first non-ASCII letter) and pollute both
+    ``raw_code`` and the parser's ``suffix``.
+
+    A trailing slash token is kept only when it is plausibly a
+    suffix, i.e. it carries a ``:YYYY`` year (``/AC:2009``), a digit
+    (``/A1``), a known amendment form (``/ac``, ``/amd2``), or it is
+    all-uppercase (``/BXD``, ``/TCĐBVN``). Anything else -- a
+    mixed-case word such as ``Ti`` -- is the start of a description,
+    not a suffix, so the whole ``/<word>`` fragment is removed.
+    A bare lowercase word that is not a known amendment is
+    indistinguishable from the start of a Vietnamese description,
+    so it is stripped too; write real suffixes in uppercase or
+    with their year. An all-caps first word after a slash is
+    inherently ambiguous with a suffix token and is kept.
+    """
+    match = re.search(r"\s*/\s*([^\s/]+)$", raw_code)
+    if not match:
+        return raw_code
+    token = match.group(1)
+    if ":" in token:
+        head, _, year = token.partition(":")
+        if head and year.isdigit() and len(year) == 4:
+            return raw_code
+        return raw_code[:match.start()].rstrip()
+    if any(ch.isdigit() for ch in token):
+        return raw_code
+    if token.lower() in {"ac"} or re.fullmatch(r"a\d+|amd\d+", token.lower()):
+        return raw_code
+    letters = [ch for ch in token if ch.isalpha()]
+    if letters and all(ch.isupper() for ch in letters):
+        return raw_code
+    return raw_code[:match.start()].rstrip()
+
+
 def clean_code_candidate(raw_code: str) -> str:
-    """Strip arbitrary prose accidentally captured as a parenthetical note."""
+    """Strip arbitrary prose accidentally captured as a parenthetical note.
+
+    The return value is always *just the matched code* (plus a kept
+    part-range / equivalent-code parenthetical, which the parser
+    needs): never the surrounding row, paragraph or cell text.
+    """
     raw_code = re.sub(r"\s+", " ", raw_code or "").strip(" .;,|\t\r\n")
     open_paren = raw_code.find("(")
     if open_paren < 0 or not raw_code.endswith(")"):
-        return raw_code
+        return _strip_invalid_slash_suffix(raw_code)
 
     note = raw_code[open_paren + 1:-1].strip()
     if _PART_NOTE.fullmatch(note):
-        return raw_code
+        return _strip_invalid_slash_suffix(raw_code)
 
     # Parenthetical equivalents are retained only when the note consists
     # entirely of one or more standard codes, without descriptive prose.
     remainder = STANDARD_CODE_BASE_PATTERN.sub("", note)
     remainder = re.sub(r"[\s,;|&+]+", "", remainder)
     if not remainder and STANDARD_CODE_BASE_PATTERN.search(note):
-        return raw_code
+        return _strip_invalid_slash_suffix(raw_code)
 
-    return raw_code[:open_paren].rstrip()
+    return _strip_invalid_slash_suffix(raw_code[:open_paren].rstrip())
+
+
+def extract_first_clean_code(text: str) -> str | None:
+    """Return the first cleaned standard code found in ``text``.
+
+    This is the single place that turns an arbitrary row, paragraph
+    or cell string into a code: it finds the first regex match and
+    runs it through :func:`clean_code_candidate`, so the result
+    never contains the surrounding description. Returns ``None``
+    when no standard-code match is found (e.g. an unknown org such
+    as ``XYZ 1234:2020``, which the pattern does not cover, or a
+    string with no code at all); callers keep the original string
+    in that case instead of inventing a code.
+    """
+    if not text:
+        return None
+    for match in STANDARD_CODE_PATTERN.finditer(text):
+        code = clean_code_candidate(match.group("code"))
+        if code:
+            return code
+    return None
 
 
 def _text(value) -> str:
@@ -179,6 +246,15 @@ def _inner_codes_from_parentheticals(raw_code: str) -> list[str]:
 
 
 def _extract_from_text(text: str, source: dict, use_ai_fallback: bool) -> list[dict]:
+    """Extract codes from one text string (one cell, one paragraph, one page).
+
+    Only the cleaned matched code is ever emitted as ``"code"``:
+    the input string itself -- a whole row, paragraph or cell that
+    may contain a long description -- is never copied into a
+    record. Table callers must use :func:`_extract_from_cells`,
+    which scans each cell separately, instead of joining a row's
+    cells into one ``" | "`` string and scanning that.
+    """
     found = []
     for match in STANDARD_CODE_PATTERN.finditer(text or ""):
         matched_code = match.group("code")

@@ -527,12 +527,23 @@ def parse_standard_code(raw_code: str) -> dict:
     if suffix:
         suffix = suffix.strip()
         if suffix.startswith("/"):
-            suffix = suffix[1:]
+            suffix = suffix[1:].strip()
         if suffix:
-            amend_match = re.search(r"(AC|A\d+|AMD\d+):?(\d{4})?", suffix)
-            if amend_match:
-                result["amendment"] = amend_match.group(0)
-            result["suffix"] = suffix
+            # A valid suffix is a single token (AC:2009, TCĐBVN,
+            # -02, +A1). Multi-word text after the code -- e.g. a
+            # description separated by "|", "-" or a space, which
+            # _parse_remainder returns verbatim as the suffix --
+            # is surrounding prose, not a suffix. Drop it instead
+            # of letting it leak into corrected_code via the
+            # build_canonical_code() fallback. Single-token suffixes
+            # are kept exactly as before.
+            if re.search(r"\s", suffix):
+                result["suffix"] = None
+            else:
+                amend_match = re.search(r"(AC|A\d+|AMD\d+):?(\d{4})?", suffix)
+                if amend_match:
+                    result["amendment"] = amend_match.group(0)
+                result["suffix"] = suffix
 
     # -------------------------------------------------
     # STEP 4 — BUILD FULL CODE (main + parts, as before)
