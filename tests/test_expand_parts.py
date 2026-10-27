@@ -1,14 +1,16 @@
 """Part-range/list expansion into one record per part.
 
-See PIPELINE.md "Part expansion" for the full rule. The key
-distinction: only an *explicit* range ("1 đến 10", "1-10" in a
-part note, "từ 1 đến 10") or an explicit list ("các phần 1, 2,
-5, 6, 7") expands. Hierarchical parts such as "4-41" in
-TCVN 7447-4-41:2010 or "1-1" in EN 1994-1-1:2004 -- and a bare
-hyphen code such as "BS EN 13146-1-10" on its own, which is
-indistinguishable from one -- must NOT expand: the user's own
-foreign-standards file contains EN 1993-1-10, EN 1991-1-2 and
-IEC 60146-1-3, all single hierarchical documents.
+See PIPELINE.md "Part expansion" for the full rule. An explicit
+range ("1 đến 10", "1-10" in a part note, "từ 1 đến 10"), an
+explicit list ("các phần 1, 2, 5, 6, 7"), AND a bare hyphen
+code "MAIN-A-B" with B > A all expand, per the user's catalog
+rule: a complete code is org + main + part + year + optional
+equivalent, a missing field is simply left out (never invented),
+and "EN 1993-1-10" means parts 1..10, not a single hierarchical
+document. The trade-off is explicit: a bare "4-41" code now
+also expands to 4..41. What does NOT expand: a single part, a
+degenerate "1-1" (B == A), and codes with any number of parts
+other than two.
 """
 
 import pytest
@@ -29,20 +31,35 @@ def test_parser_marks_range_and_list_for_expansion():
     assert list_parsed["expanded_parts"] == ["1", "2", "5", "6", "7"]
 
 
-def test_parser_does_not_mark_hierarchical_or_bare_parts():
-    hierarchical = parse_standard_code("TCVN 7447-4-41:2010")
-    assert hierarchical["std_parts"] == ["4", "41"]
-    assert hierarchical["expanded_parts"] is None
+def test_parser_marks_bare_range_for_expansion():
+    # Bare hyphen codes, per the user's catalog rule: "MAIN-A-B"
+    # with B > A is a range A..B, even with no range/list words.
+    for text, expected in (
+        ("ISO 9001-1-10:2015", [str(n) for n in range(1, 11)]),
+        ("EN 1993-1-10", [str(n) for n in range(1, 11)]),
+        ("BS EN 13146-1-10", [str(n) for n in range(1, 11)]),
+    ):
+        parsed = parse_standard_code(text)
+        assert parsed["parts_kind"] == "bare_range"
+        assert parsed["expanded_parts"] == expected
 
+    # The trade-off, stated explicitly: a bare "4-41" code is
+    # read the same way, so it expands to 4..41 (38 parts).
+    wide = parse_standard_code("TCVN 7447-4-41:2010")
+    assert wide["std_parts"] == ["4", "41"]
+    assert wide["parts_kind"] == "bare_range"
+    assert wide["expanded_parts"] == [str(n) for n in range(4, 42)]
+
+
+def test_parser_does_not_expand_degenerate_or_other_part_counts():
+    # B == A is degenerate, not a range.
     eurocode = parse_standard_code("EN 1994-1-1:2004/AC:2009")
     assert eurocode["std_parts"] == ["1", "1"]
     assert eurocode["expanded_parts"] is None
 
-    # Bare hyphen form, with no range/list words: indistinguishable
-    # from a hierarchical part, so it is deliberately NOT expanded.
-    bare = parse_standard_code("BS EN 13146-1-10")
-    assert bare["std_parts"] == ["1", "10"]
-    assert bare["expanded_parts"] is None
+    single = parse_standard_code("TCVN 13695-1:2023")
+    assert single["std_parts"] == ["1"]
+    assert single["expanded_parts"] is None
 
 
 def test_process_text_expands_user_range_example():
@@ -90,15 +107,46 @@ def test_process_text_keeps_suffix_on_every_expanded_part():
     assert all(r["suffix"] == "AC:2009" for r in records)
 
 
-def test_process_text_does_not_expand_hierarchical_or_bare_codes():
-    records = process_text("TCVN 7447-4-41:2010", use_ai_fallback=False)
-    assert len(records) == 1
-    assert records[0]["corrected_code"] == "TCVN 7447-4-41:2010"
-    assert records[0]["parts"] == "4-41"
+def test_process_text_expands_bare_range():
+    # The user's exact failing case: ISO 9001-1-10:2015 now
+    # expands to 10 records, year kept on every part.
+    records = process_text("ISO 9001-1-10:2015", use_ai_fallback=False)
+    assert [r["corrected_code"] for r in records] == [
+        f"ISO 9001-{n}:2015" for n in range(1, 11)
+    ]
+
+    # EN 1993-1-10, per the user's rule, is EN 1993-1 .. -10
+    # (no year in the input, so none is invented).
+    records = process_text("EN 1993-1-10", use_ai_fallback=False)
+    assert [r["corrected_code"] for r in records] == [
+        f"EN 1993-{n}" for n in range(1, 11)
+    ]
+    assert all(r["year"] is None for r in records)
 
     records = process_text("BS EN 13146-1-10", use_ai_fallback=False)
+    assert len(records) == 10
+    assert records[-1]["corrected_code"] == "EN 13146-10"
+
+
+def test_process_text_keeps_degenerate_code_single():
+    records = process_text("EN 1994-1-1:2004/AC:2009", use_ai_fallback=False)
     assert len(records) == 1
-    assert records[0]["corrected_code"] == "EN 13146-1-10"
+    assert records[0]["corrected_code"] == "EN 1994-1-1:2004/AC:2009"
+    assert records[0]["parts"] == "1-1"
+
+
+def test_process_text_complete_code_with_equivalent():
+    # A complete code: org + main + part + year + equivalent.
+    # The equivalent is its own record with its own year, and a
+    # missing field (here: the equivalent has no part list beyond
+    # its single part) is simply left out, never invented.
+    records = process_text(
+        "TCVN 13695-1:2023 (BS EN 13146-1:2019)", use_ai_fallback=False)
+    by_code = {r["corrected_code"]: r for r in records}
+    assert by_code["TCVN 13695-1:2023"]["year"] == 2023
+    assert by_code["TCVN 13695-1:2023"]["parts"] == "1"
+    assert by_code["EN 13146-1:2019"]["year"] == 2019
+    assert by_code["EN 13146-1:2019"]["parts"] == "1"
 
 
 def test_process_candidate_stays_single_record_for_compatibility():

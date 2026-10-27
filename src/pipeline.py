@@ -205,17 +205,22 @@ def _record_from_parsed(raw_text: str, parsed: dict, *, verified: bool,
 def _expand_record(record: dict, parsed: dict | None) -> list[dict]:
     """Expand one range/list record into one record per part.
 
-    The parser marks a record expandable only when its parts came
-    from an explicit range (``1 đến 10``, ``1-10`` in a part note)
-    or an explicit list (``các phần 1, 2, 5, 6, 7``), via
-    ``parsed["expanded_parts"]``. Hierarchical parts such as
-    ``4-41`` in TCVN 7447-4-41:2010 or ``1-1`` in EN 1994-1-1:2004
-    are never expanded, and neither is a bare hyphen code such as
-    ``BS EN 13146-1-10`` on its own: without range/list words it
-    is indistinguishable from a hierarchical part, so it keeps
-    its single record (a range record that originated from
-    ``1 đến 10`` does expand, and its expanded codes are exactly
-    the ``BS EN 13146-1:2019`` … ``BS EN 13146-10:2019`` lines).
+    The parser marks a record expandable via
+    ``parsed["expanded_parts"]`` when its parts came from an
+    explicit range (``1 đến 10``, ``1-10`` in a part note), an
+    explicit list (``các phần 1, 2, 5, 6, 7``), or a bare hyphen
+    code ``MAIN-A-B`` with B > A, which the user's catalog rule
+    reads as a range A..B (``ISO 9001-1-10:2015`` ->
+    ``ISO 9001-1:2015`` … ``ISO 9001-10:2015``; ``EN 1993-1-10``
+    -> ``EN 1993-1`` … ``EN 1993-10``). A missing field is simply
+    left out, never invented: no year, no part, or no equivalent
+    in the input means none in the expanded records either.
+    Codes that do not expand: a single part, a degenerate
+    ``1-1`` (B == A), and codes with any number of parts other
+    than two. Note the trade-off the user accepted: a bare
+    ``4-41`` code now also expands to 4..41, even though in
+    international numbering some such codes are a single
+    hierarchical document; the catalog rule overrides that reading.
 
     Each expanded record keeps the original's organization, main
     number, year, suffix, confidence and verified flag, but has
