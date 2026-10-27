@@ -31,8 +31,8 @@ _STANDARD_CODE_CORE = (
     # The endpoint is limited to 1-3 digits with (?!\d) so a
     # sentence date range such as "TCVN 1234:2020 đến 2025" is
     # NOT captured as a part range.
-    r"(?:\s*(?:từ|from)\s*-?\s*\d{1,3}(?!\d)\s*(?:đến|tới|to)\s*(?:phần\s*)?\d{1,3}(?!\d)(?:\s*:\s*\d{4})?)?"
-    r"(?:\s*(?:đến|tới)\s*(?:phần\s*)?\d{1,3}(?!\d)(?:\s*:\s*\d{4})?)?"
+    r"(?:\s*(?:từ|from)\s*-?\s*\d{1,3}(?!\d)\s*(?:đến|tới|to)\s*(?:phần\s*)?\d{1,3}(?!\d)(?:\s*:\s*\d{4})?(?:\s*/\s*[A-Z0-9Đ-]+(?::\s*\d{4})?)?)?"
+    r"(?:\s*(?:đến|tới)\s*(?:phần\s*)?\d{1,3}(?!\d)(?:\s*:\s*\d{4})?(?:\s*/\s*[A-Z0-9Đ-]+(?::\s*\d{4})?)?)?"
 )
 _STANDARD_CODE_PREFIX = r"(?<![A-Z0-9])(?P<code>"
 STANDARD_CODE_BASE_PATTERN = re.compile(

@@ -66,14 +66,18 @@ def test_parenthetical_year_only_and_outside_year_wins():
 
 
 def test_process_text_keeps_tu_den_range_and_year():
+    # Part expansion: a "từ 1 đến 10" range now yields one record
+    # per part, each keeping the year; the single "1-10" record
+    # is still what process_candidate returns.
     records = process_text("Áp dụng TCVN 13566 từ 1 đến 10:2019.")
-    assert len(records) == 1
-    assert records[0]["raw_text"] == "TCVN 13566 từ 1 đến 10:2019"
-    assert records[0]["parts"] == "1-10"
-    assert records[0]["year"] == 2019
+    assert [r["corrected_code"] for r in records] == [
+        f"TCVN 13566-{n}:2019" for n in range(1, 11)
+    ]
+    assert all(r["year"] == 2019 for r in records)
     records = process_text("Áp dụng TCVN 13566 (từ 1 đến 10, 2019).")
-    assert records[0]["parts"] == "1-10"
-    assert records[0]["year"] == 2019
+    assert len(records) == 10
+    assert records[0]["parts"] == "1"
+    assert all(r["year"] == 2019 for r in records)
 
 
 def test_process_text_does_not_capture_sentence_date_range():

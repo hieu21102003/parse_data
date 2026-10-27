@@ -48,6 +48,7 @@ try:
         clean_code_candidate,
         extract_first_clean_code,
         extract_standard_codes,
+        standard_name_for_parts,
     )
     from src.parsers.std_code_parser import parse_standard_code
 except ModuleNotFoundError:  # running with src/ itself on PYTHONPATH
@@ -57,6 +58,7 @@ except ModuleNotFoundError:  # running with src/ itself on PYTHONPATH
         clean_code_candidate,
         extract_first_clean_code,
         extract_standard_codes,
+        standard_name_for_parts,
     )
     from parsers.std_code_parser import parse_standard_code  # type: ignore
 
@@ -118,12 +120,19 @@ def _float_score(value) -> float:
         return 0.0
 
 
-def build_canonical_code(parsed: dict) -> str | None:
-    """Rebuild ``ORG MAIN[-PARTS]:YEAR[/SUFFIX]`` from a parsed result."""
+def build_canonical_code(parsed: dict, org=None) -> str | None:
+    """Rebuild ``ORG MAIN[-PARTS]:YEAR[/SUFFIX]`` from a parsed result.
+
+    ``org`` overrides the organization used in the rebuilt code
+    (default: the normalized org). It exists so an expanded
+    record's ``raw_text`` can keep the org exactly as written in
+    the source (e.g. ``BS EN``) while ``corrected_code`` uses the
+    normalized org (``EN``).
+    """
     main = parsed.get("std_main_number")
     if not main:
         return None
-    org = parsed.get("org_normalized") or parsed.get("org_prefix")
+    org = org or parsed.get("org_normalized") or parsed.get("org_prefix")
     parts = parsed.get("std_parts") or []
     code = f"{main}-{ '-'.join(parts)}" if parts else str(main)
     if parsed.get("series_letter"):
@@ -191,6 +200,80 @@ def _record_from_parsed(raw_text: str, parsed: dict, *, verified: bool,
         "verified": bool(verified),
         "explanation": explanation or "",
     }
+
+
+def _expand_record(record: dict, parsed: dict | None) -> list[dict]:
+    """Expand one range/list record into one record per part.
+
+    The parser marks a record expandable only when its parts came
+    from an explicit range (``1 đến 10``, ``1-10`` in a part note)
+    or an explicit list (``các phần 1, 2, 5, 6, 7``), via
+    ``parsed["expanded_parts"]``. Hierarchical parts such as
+    ``4-41`` in TCVN 7447-4-41:2010 or ``1-1`` in EN 1994-1-1:2004
+    are never expanded, and neither is a bare hyphen code such as
+    ``BS EN 13146-1-10`` on its own: without range/list words it
+    is indistinguishable from a hierarchical part, so it keeps
+    its single record (a range record that originated from
+    ``1 đến 10`` does expand, and its expanded codes are exactly
+    the ``BS EN 13146-1:2019`` … ``BS EN 13146-10:2019`` lines).
+
+    Each expanded record keeps the original's organization, main
+    number, year, suffix, confidence and verified flag, but has
+    exactly one part: ``raw_text`` is the expanded code as written
+    in the source (original org, e.g. ``BS EN``), ``corrected_code``
+    is the same code with the normalized org (e.g. ``EN``), and
+    ``standard_name`` -- when present -- is re-split per part, so
+    a part-list title also yields only its own part's title.
+    The original range/list is noted in ``explanation`` so the
+    expansion is traceable. Returns ``[record]`` unchanged when
+    the record is not expandable, or when an AI correction changed
+    the code so the original parsed parts no longer describe it.
+    """
+    if not parsed:
+        return [record]
+    expanded = parsed.get("expanded_parts") or []
+    if len(expanded) < 2:
+        return [record]
+    canonical = build_canonical_code(parsed)
+    if (
+        canonical
+        and record.get("corrected_code")
+        and record["corrected_code"] != canonical
+        and record["corrected_code"] != record.get("raw_text")
+    ):
+        return [record]
+    original_parts = record.get("parts")
+    note = (
+        f" Expanded from parts {original_parts} into "
+        f"{len(expanded)} separate part records."
+        if original_parts
+        else f" Expanded into {len(expanded)} separate part records."
+    )
+    base_explanation = record.get("explanation") or ""
+    records = []
+    for part in expanded:
+        single_parsed = dict(parsed)
+        single_parsed["std_parts"] = [part]
+        single_parsed["std_part"] = f"-{part}"
+        expanded_record = dict(record)
+        expanded_record["parts"] = part
+        expanded_record["corrected_code"] = (
+            build_canonical_code(single_parsed) or record["corrected_code"]
+        )
+        expanded_record["raw_text"] = (
+            build_canonical_code(
+                single_parsed,
+                org=parsed.get("org_prefix") or parsed.get("org_normalized"),
+            )
+            or expanded_record["corrected_code"]
+        )
+        if record.get("standard_name"):
+            expanded_record["standard_name"] = standard_name_for_parts(
+                record["standard_name"], {"std_parts": [part]}
+            )
+        expanded_record["explanation"] = (base_explanation + note).strip()
+        records.append(expanded_record)
+    return records
 
 
 def process_candidate(raw_text: str, *, use_ai_fallback: bool = True,
@@ -297,6 +380,24 @@ def process_candidate(raw_text: str, *, use_ai_fallback: bool = True,
     )
 
 
+def process_candidate_expanded(raw_text: str, *, use_ai_fallback: bool = True,
+                               ai_suggester=None) -> list[dict]:
+    """Like :func:`process_candidate`, but expanding range/list codes.
+
+    Returns one record per part for an expandable range/list code
+    (see :func:`_expand_record`), and a single-element list
+    otherwise. ``process_candidate`` itself stays single-record for
+    backward compatibility; :func:`process_text` and
+    :func:`process_document` use this expanded form.
+    """
+    record = process_candidate(
+        raw_text, use_ai_fallback=use_ai_fallback, ai_suggester=ai_suggester)
+    # Re-parse deterministically for the expansion provenance.
+    # This adds no Gemini call: it only reads parsed["expanded_parts"].
+    cleaned = extract_first_clean_code(raw_text) or (raw_text or "").strip()
+    return _expand_record(record, parse_standard_code(cleaned))
+
+
 def _inner_codes_from_parentheticals(raw_text: str) -> list[str]:
     """Codes inside parentheses of an outer candidate (see extractor).
 
@@ -321,16 +422,37 @@ def _inner_codes_from_parentheticals(raw_text: str) -> list[str]:
 
 
 def process_text(text: str, *, use_ai_fallback: bool = True, ai_suggester=None) -> list[dict]:
-    """Extract candidates from a plain-text string and process each one."""
+    """Extract candidates from a plain-text string and process each one.
+
+    Range/list codes are expanded into one record per part (see
+    :func:`_expand_record`). Expanded codes are deduplicated by
+    corrected_code, so a part that appears both inside a range and
+    as its own code is emitted only once.
+    """
     seen = set()
+    seen_expanded = set()
     records = []
+
+    def _append_expanded(expanded):
+        if len(expanded) > 1:
+            for record in expanded:
+                if record["corrected_code"] in seen_expanded:
+                    continue
+                seen_expanded.add(record["corrected_code"])
+                records.append(record)
+        elif expanded:
+            # A single record that was already emitted as part of
+            # an earlier range is a duplicate of that part.
+            if expanded[0]["corrected_code"] in seen_expanded:
+                return
+            records.append(expanded[0])
 
     def _add(raw):
         key = re.sub(r"\s+", " ", raw).strip().upper()
         if not raw or key in seen:
             return
         seen.add(key)
-        records.append(process_candidate(
+        _append_expanded(process_candidate_expanded(
             raw, use_ai_fallback=use_ai_fallback, ai_suggester=ai_suggester))
 
     for match in STANDARD_CODE_PATTERN.finditer(text or ""):
@@ -351,6 +473,7 @@ def process_document(file_path, *, use_ai_fallback: bool = True, ai_suggester=No
     """
     candidates = extract_standard_codes(file_path, use_ai_fallback=False)
     records = []
+    seen_expanded = set()
     for item in candidates:
         # Only the extractor's cleaned "code" field is ever used.
         # There is deliberately NO fallback to a "raw_text" field:
@@ -371,13 +494,25 @@ def process_document(file_path, *, use_ai_fallback: bool = True, ai_suggester=No
                                if equivalent else ""),
             )
             record["standard_name"] = item.get("standard_name")
-            records.append(record)
+            expanded = _expand_record(record, parsed)
         else:
             # Reuse process_candidate for the threshold + Gemini logic.
             record = process_candidate(
                 raw, use_ai_fallback=use_ai_fallback, ai_suggester=ai_suggester)
             record["standard_name"] = item.get("standard_name")
-            records.append(record)
+            expanded = _expand_record(record, parsed)
+        # Range/list codes expand into one record per part, and
+        # expanded codes are deduplicated, as in process_text.
+        if len(expanded) > 1:
+            for record in expanded:
+                if record["corrected_code"] in seen_expanded:
+                    continue
+                seen_expanded.add(record["corrected_code"])
+                records.append(record)
+        elif expanded:
+            if expanded[0]["corrected_code"] in seen_expanded:
+                continue
+            records.append(expanded[0])
     return records
 
 

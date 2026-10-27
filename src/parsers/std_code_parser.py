@@ -371,6 +371,82 @@ def _extract_year_from_version(version_text: str):
     return None
 
 
+# Expansion limits. A part range/list is expanded into one record per
+# part only when every part number is a plausible part (not a year) and
+# the expansion is not absurdly large. These guards stop a misread
+# date range such as "2020 đến 2025" (part numbers would be years)
+# or a typo range such as "1 đến 1000" from exploding into thousands
+# of records; such cases keep the single range record instead.
+_MAX_EXPANDED_PARTS = 100
+_MAX_PART_NUMBER = 999
+
+
+def _expand_range_parts(parts: list[str]) -> list[str] | None:
+    """Expand a two-endpoint range [start, end] into every part in between."""
+    if len(parts) != 2:
+        return None
+    try:
+        start, end = int(parts[0]), int(parts[1])
+    except (TypeError, ValueError):
+        return None
+    if start < 1 or end < start or end > _MAX_PART_NUMBER:
+        return None
+    if end - start + 1 > _MAX_EXPANDED_PARTS:
+        return None
+    return [str(number) for number in range(start, end + 1)]
+
+
+def _part_range_kind(version_text: str) -> str | None:
+    """Classify a parenthetical note as a part "range", a part "list", or None.
+
+    This mirrors _extract_part_range_from_version's own logic, but
+    keeps the distinction that function erases: a range such as
+    "các phần 1-6" / "phần 1 đến 3" expands to every part between
+    its endpoints, while a list such as "các phần 1, 3, 5" expands
+    to exactly the listed parts, nothing in between.
+    """
+    if not version_text:
+        return None
+    text = version_text.strip().lower()
+    has_part_keyword = "phần" in text or "part" in text
+    has_range_word = "từ" in text or "đến" in text or "tới" in text
+    range_match = re.search(
+        r"(\d+)\s*(?:-|–|—|đến|tới|to)\s*(?:phần\s*|part\s*)?(\d+)", text)
+    if range_match and (
+        has_part_keyword
+        or has_range_word
+        or re.fullmatch(r"\s*\d+\s*(?:-|–|—)\s*\d+\s*", text)
+    ):
+        return "range"
+    if has_part_keyword:
+        return "list"
+    return None
+
+
+def _expanded_parts_for(parts: list[str], kind: str | None) -> list[str] | None:
+    """Return the per-part expansion for a range/list, or None.
+
+    Returns None for hierarchical parts (kind None, e.g. the "4-41"
+    in TCVN 7447-4-41:2010 or the "1-1" in EN 1994-1-1:2004), for a
+    single part, and for any range/list that fails the safety
+    guards in _expand_range_parts. Callers expand only when this
+    returns a list of at least two parts.
+    """
+    if kind == "range":
+        return _expand_range_parts(parts)
+    if kind == "list":
+        if len(parts) < 2 or len(parts) > _MAX_EXPANDED_PARTS:
+            return None
+        try:
+            numbers = [int(part) for part in parts]
+        except (TypeError, ValueError):
+            return None
+        if any(number < 1 or number > _MAX_PART_NUMBER for number in numbers):
+            return None
+        return [str(number) for number in numbers]
+    return None
+
+
 def _extract_vietnamese_range_from_rest(rest: str):
     """Extract a 'từ X đến Y' / '-X đến Y' range outside parentheses.
 
@@ -437,6 +513,15 @@ def parse_standard_code(raw_code: str) -> dict:
         "std_part": None,
         "std_parts": [],
         "std_code_full": None,
+        # Part-expansion provenance, for the pipeline's per-part
+        # expansion. "range" = every part between two endpoints
+        # (e.g. "1 đến 10"), "list" = exactly the listed parts
+        # (e.g. "các phần 1, 2, 5, 6, 7"), None = hierarchical
+        # parts such as "4-41" or a single part, which must NOT
+        # be expanded. expanded_parts is the per-part list when
+        # expansion applies, else None.
+        "parts_kind": None,
+        "expanded_parts": None,
 
         "std_year": None,
         "amendment": None,
@@ -505,8 +590,12 @@ def parse_standard_code(raw_code: str) -> dict:
     # "TCVN 13566 từ 1 đến 10:2019" -> range ["1", "10"], rest ":2019".
     range_from_rest, rest_cleaned = _extract_vietnamese_range_from_rest(rest)
     parts, year, suffix = _parse_remainder(rest_cleaned, org_norm, org_part)
+    parts_kind = None
+    expanded_parts = None
     if range_from_rest and not parts:
         parts = range_from_rest
+        parts_kind = "range"
+        expanded_parts = _expand_range_parts(range_from_rest)
     if result["equivalent_text"] is None:
         # Only a plain part/year note may supply the outer code's
         # parts/year. An equivalent code in parentheses must NOT:
@@ -514,12 +603,24 @@ def parse_standard_code(raw_code: str) -> dict:
         if not parts:
             # Part range/list carried only in the parenthetical note, e.g.
             # "TCVN 13566:2022 (các phần 1-6)" -> parts ["1", "6"].
-            parts = _extract_part_range_from_version(result["version_text"])
+            version_parts = _extract_part_range_from_version(result["version_text"])
+            if version_parts:
+                parts = version_parts
+                parts_kind = _part_range_kind(result["version_text"])
+                expanded_parts = _expanded_parts_for(version_parts, parts_kind)
         if year is None:
             # Year carried only in the parenthetical note, e.g.
             # "TCVN 13566 (từ 1 đến 10, 2019)" -> year 2019, not null.
             # An outside year, when present, always wins (see test).
             year = _extract_year_from_version(result["version_text"])
+    # Only an expansion of at least two parts is an expansion at
+    # all; a degenerate range such as "1-1" keeps its original record.
+    if not expanded_parts or len(expanded_parts) < 2:
+        expanded_parts = None
+        if parts_kind not in ("range", "list"):
+            parts_kind = None
+    result["parts_kind"] = parts_kind
+    result["expanded_parts"] = expanded_parts
     result["std_parts"] = parts
     result["std_part"] = ("-" + "-".join(parts)) if parts else None
     result["std_year"] = year
