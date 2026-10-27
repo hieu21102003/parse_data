@@ -516,9 +516,12 @@ def parse_standard_code(raw_code: str) -> dict:
         # Part-expansion provenance, for the pipeline's per-part
         # expansion. "range" = every part between two endpoints
         # (e.g. "1 đến 10"), "list" = exactly the listed parts
-        # (e.g. "các phần 1, 2, 5, 6, 7"), None = hierarchical
-        # parts such as "4-41" or a single part, which must NOT
-        # be expanded. expanded_parts is the per-part list when
+        # (e.g. "các phần 1, 2, 5, 6, 7"), "bare_range" = a bare
+        # hyphen code "MAIN-A-B" with B > A, which the user's
+        # catalog rule reads as a range A..B (e.g. "EN 1993-1-10"
+        # -> parts 1..10), None = a single part, a degenerate
+        # "1-1", or any other number of parts, which is not
+        # expanded. expanded_parts is the per-part list when
         # expansion applies, else None.
         "parts_kind": None,
         "expanded_parts": None,
@@ -619,6 +622,24 @@ def parse_standard_code(raw_code: str) -> dict:
         expanded_parts = None
         if parts_kind not in ("range", "list"):
             parts_kind = None
+    # Bare hyphen range, per the user's catalog rule: a code
+    # written "ORG MAIN-A-B" with no range/list words is a range
+    # from part A to part B, e.g. "EN 1993-1-10" -> parts 1..10
+    # and "ISO 9001-1-10:2015" -> ISO 9001-1:2015 .. ISO 9001-10:2015.
+    # This is the user's explicit definition of a complete code
+    # (org + main + part + year + optional equivalent; a missing
+    # field is simply left out, never invented), and it overrides
+    # the international reading under which some such codes are a
+    # single hierarchical document (EN 1993-1-10 is also a single
+    # Eurocode document). Only two-part codes with B > A expand;
+    # a degenerate "1-1" (B == A) and codes with any other number
+    # of parts do not. The same 100-part / part <= 999 guards
+    # apply, so e.g. a "4-41" code expands to 4..41 (38 parts).
+    if parts_kind is None and expanded_parts is None and len(parts) == 2:
+        bare_expanded = _expand_range_parts(parts)
+        if bare_expanded and len(bare_expanded) >= 2:
+            parts_kind = "bare_range"
+            expanded_parts = bare_expanded
     result["parts_kind"] = parts_kind
     result["expanded_parts"] = expanded_parts
     result["std_parts"] = parts
