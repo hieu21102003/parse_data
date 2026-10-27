@@ -89,6 +89,10 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
      stays unverified with `year: null` and an explanation saying
      the year is missing in the source. That is not a parser failure:
      filling the year needs Gemini research or the source document.
+     A digit token in the year position that is not a valid year
+     (1900-2100), e.g. `:1231` or `/9999`, counts the same way:
+     it is neither a year nor a suffix and is dropped, so the
+     canonical code never gains an invented `/:1231` suffix.
    - A parenthetical part note is not discarded: `TCVN 13566:2022
      (các phần 1-6)` gives `parts: "1-6"`, `TCVN 1234:2020 (phần 1
      đến 3)` gives `parts: "1-3"`, while `(rev 1)` stays version

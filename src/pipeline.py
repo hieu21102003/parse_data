@@ -144,9 +144,10 @@ def build_canonical_code(parsed: dict, org=None) -> str | None:
         code = f"{code}:{year}"
     suffix = parsed.get("suffix")
     if suffix:
-        # Suffixes that already carry their own separator (+A1, -02)
-        # must not get an extra "/".
-        if suffix.startswith(("-", "+")):
+        # Suffixes that already carry their own separator (+A1, -02,
+        # or a leading ":" such as ":1231") must not get an extra
+        # "/": joining one produced "/:1231" in canonical codes.
+        if suffix.startswith(("-", "+", ":")):
             code = f"{code}{suffix}"
         else:
             code = f"{code}/{suffix}"
