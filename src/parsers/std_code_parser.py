@@ -192,7 +192,11 @@ def _parse_remainder(rest: str, org_normalized, org_prefix):
     as the year instead of being lost with the list, as it used
     to be: the loop previously stopped at the first comma and
     kept ",2,3,4,5:2022" as a suffix. "và"/"and" before the last
-    number ("1, 2 và 5") is treated the same way. A comma number
+    number ("1, 2 và 5") is treated the same way. A digit token
+    in the year position (after ':', '/', or a space) that is not
+    a valid year (1900-2100), e.g. ":1231" or "/9999", is
+    neither a year nor a suffix and is dropped, so it never
+    becomes a "/:1231" suffix in the canonical code. A comma number
     that is a 4-digit year is treated as the year, not a part.
     """
     parts: list[str] = []
@@ -231,19 +235,39 @@ def _parse_remainder(rest: str, org_normalized, org_prefix):
             s = after
             continue
         if s.startswith(":"):
-            m = re.match(r":\s*(\d{4})\b(.*)$", s, re.DOTALL)
-            if m and year is None and _is_year_token(m.group(1)):
-                year = int(m.group(1))
-                s = m.group(2).strip()
+            m = re.match(r":\s*(\d+)(.*)$", s, re.DOTALL)
+            if m and year is None:
+                num, after = m.group(1), m.group(2).strip()
+                if _is_year_token(num):
+                    year = int(num)
+                    s = after
+                    continue
+                # A digit token after ":" sits in the year position
+                # but is not a valid year (1900-2100), e.g. ":1231",
+                # ":9999" or ":12313": it is neither a year nor a
+                # suffix, so drop it instead of keeping ":1231" as
+                # a suffix, which build_canonical_code() used to
+                # join with "/" ("ISO .../:1231"). A following real
+                # suffix (":1231/AC:2009") is still parsed below.
+                s = after
                 continue
             suffix = s
             break
         if s.startswith("/"):
-            m = re.match(r"/\s*(\d{4})\b(.*)$", s, re.DOTALL)
-            if m and year is None and _is_year_token(m.group(1)):
-                year = int(m.group(1))
-                s = m.group(2).strip()
-                continue
+            m = re.match(r"/\s*(\d+)(.*)$", s, re.DOTALL)
+            if m and year is None:
+                num, after = m.group(1), m.group(2).strip()
+                if _is_year_token(num):
+                    year = int(num)
+                    s = after
+                    continue
+                if len(num) >= 4:
+                    # "/1231", "/9999": a year-position token that
+                    # is not a valid year -- neither year nor suffix.
+                    # Shorter digit groups ("/2") keep the existing
+                    # suffix behaviour.
+                    s = after
+                    continue
             suffix = s[1:].strip() or None
             break
         if s.startswith("-"):
@@ -279,8 +303,27 @@ def _parse_remainder(rest: str, org_normalized, org_prefix):
                 year = int(m.group(1))
                 s = m.group(2).strip()
                 continue
+            stripped = s.strip()
+            if year is None and stripped.isdigit() and len(stripped) >= 4:
+                # The whole remainder is a year-position digit token
+                # that is not a valid year (" 1231", " 12313"):
+                # neither year nor suffix.
+                s = ""
+                continue
             suffix = s.strip() or None
             break
+        if s.isdigit() and year is None and len(s) >= 4:
+            # A bare trailing number reached here only because an
+            # earlier branch stripped the separator that preceded
+            # it (e.g. "TCVN 1234-1 2013" -> after "-1", s is
+            # "2013"). A valid year is the year; a year-sized
+            # token that is not a valid year ("1231") is neither
+            # year nor suffix. Shorter digit groups keep the
+            # existing suffix behaviour.
+            if _is_year_token(s):
+                year = int(s)
+            s = ""
+            continue
         suffix = s
         break
 
