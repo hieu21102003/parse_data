@@ -63,6 +63,10 @@ CODE_REGEX = re.compile(
 ORG_MAP = {
     "TCVN": "TCVN",
     "TCVN/ISO": "TCVN",
+    # Preserve this literal combined prefix when it appears in source data.
+    # Without an exact entry, normalize_org's startswith fallback reduced
+    # "TCVN EN" to "TCVN", dropping the trailing designation.
+    "TCVN EN": "TCVN EN",
     "QCVN": "QCVN",
     "ISO": "ISO",
     "EN": "EN",
@@ -338,6 +342,7 @@ def _extract_series_letter(org_part: str):
     Merged forms such as 'JISC' / 'ASTMD' / 'AASHTOT' are split when
     the prefix is a known body.
     """
+    org_part = _remove_repeated_org_prefix(org_part)
     tokens = org_part.split()
     if len(tokens) >= 2 and len(tokens[-1]) == 1 and tokens[-1].isalpha():
         return " ".join(tokens[:-1]), tokens[-1]
@@ -349,6 +354,21 @@ def _extract_series_letter(org_part: str):
                 if rest.isalpha() and len(rest) <= 2:
                     return known, rest
     return org_part, None
+
+
+def _remove_repeated_org_prefix(org_part: str) -> str:
+    """Collapse an exact duplicate of a known organization prefix.
+
+    Handles both merged and spaced forms (``ENEN`` / ``EN EN``) before
+    the series-letter logic runs, so a duplicated ``EN`` is not mistaken
+    for a legitimate series letter.
+    """
+    cleaned = re.sub(r"\s+", " ", (org_part or "").strip().upper())
+    for known in sorted(ORG_MAP, key=len, reverse=True):
+        prefix = re.sub(r"\s+", " ", known.upper()).strip()
+        if cleaned in {prefix + prefix, prefix + " " + prefix}:
+            return prefix
+    return cleaned
 
 
 # -------------------------------------------------
