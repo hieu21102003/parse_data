@@ -23,8 +23,7 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
      (`standard_name_for_parts`); records with no part, a part
      range, or a part not listed in the title keep the full title.
    - **Part expansion** — a code whose parts come from an explicit
-     range or list, or from a bare hyphen code `MAIN-A-B` with
-     B > A, is expanded into one record per part, in
+     range or list is expanded into one record per part, in
      `process_text` and `process_document` (and via the new
      `process_candidate_expanded`; `process_candidate` itself
      still returns the single range record for compatibility):
@@ -32,28 +31,30 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
      `BS EN 13146-10:2019` (raw_text keeps `BS EN` as written,
      corrected_code normalises it to `EN`); `EN 13481 (các phần
      1, 2, 5, 6, 7)` → exactly `EN 13481-1, -2, -5, -6, -7`, with
-     no invented parts and no invented year. Year and suffix are
-     kept on every expanded part, a part-list title is re-split
-     per expanded part, and a part that appears both inside a
-     range and on its own is emitted only once. The parser marks
-     this with `parts_kind` (`"range"` / `"list"`) and
-     `expanded_parts`; expansion is capped at 100 parts and at
-     part numbers ≤ 999, so a misread date range or an oversized
-     range keeps its single range record instead.
-   - **Bare hyphen codes also expand** — a code written
-     `ORG MAIN-A-B` with B > A is read as a range A..B, even
-     with no range/list words: `ISO 9001-1-10:2015` →
-     `ISO 9001-1:2015` … `ISO 9001-10:2015`, and `EN 1993-1-10` →
-     `EN 1993-1` … `EN 1993-10`. This is the user's catalog
-     definition of a complete code (org + main + part + year +
-     optional equivalent; a missing field is simply left out,
-     never invented). The trade-off is explicit and accepted by
-     the user: a bare `4-41` code now also expands to 4..41,
-     even though in international numbering some such codes are
-     a single hierarchical document. What still does NOT expand:
-     a single part, a degenerate `1-1` (B == A, e.g.
-     `EN 1994-1-1:2004`), and codes with any number of parts
-     other than two.
+     no invented parts and no invented year; a comma list written
+     after the first part, `TCVN 13566-1,2,3,4,5:2022` → exactly
+     `TCVN 13566-1:2022` … `TCVN 13566-5:2022`, year kept on every
+     part. A complete code is org + main + part + year + optional
+     equivalent; a missing field is simply left out, never
+     invented. Year and suffix are kept on every expanded part,
+     a part-list title is re-split per expanded part, and a part
+     that appears both inside a range/list and on its own is
+     emitted only once. The parser marks this with `parts_kind`
+     (`"range"` / `"list"`) and `expanded_parts`; expansion is
+     capped at 100 parts and at part numbers ≤ 999, so a misread
+     date range or an oversized range keeps its single record.
+   - **Bare hyphen codes do NOT expand** — a code written
+     `ORG MAIN-A-B` with no range/list words is Part A,
+     Chapter B, a single document, not a range: `EN 1993-1-10`
+     is Part 1, Chapter 10, and `TCVN 7447-4-41:2010` is
+     Part 4, Chapter 41, so each keeps its single record with
+     parts `"1-10"` / `"4-41"`. An earlier version (PR #11)
+     expanded bare hyphen codes as ranges; that was wrong
+     under the standard's numbering and was reverted. To
+     expand, write the range or list explicitly (`…-1 đến 10`,
+     `…-1,2,3,4,5`, or `(các phần 1, 2, …)`). What also does
+     NOT expand: a single part, and a degenerate `1-1`
+     (e.g. `EN 1994-1-1:2004`).
    - `raw_text` is guaranteed to be exactly one cleaned matched code,
      never a whole row, paragraph or cell string: tables are scanned
      cell by cell (never joined with `" | "`), the extractor emits

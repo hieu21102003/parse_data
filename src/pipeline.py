@@ -207,20 +207,19 @@ def _expand_record(record: dict, parsed: dict | None) -> list[dict]:
 
     The parser marks a record expandable via
     ``parsed["expanded_parts"]`` when its parts came from an
-    explicit range (``1 đến 10``, ``1-10`` in a part note), an
-    explicit list (``các phần 1, 2, 5, 6, 7``), or a bare hyphen
-    code ``MAIN-A-B`` with B > A, which the user's catalog rule
-    reads as a range A..B (``ISO 9001-1-10:2015`` ->
-    ``ISO 9001-1:2015`` … ``ISO 9001-10:2015``; ``EN 1993-1-10``
-    -> ``EN 1993-1`` … ``EN 1993-10``). A missing field is simply
-    left out, never invented: no year, no part, or no equivalent
+    explicit range (``1 đến 10``, ``1-10`` in a part note) or
+    an explicit list (``các phần 1, 2, 5, 6, 7`` or a comma
+    list ``MAIN-1,2,3,4,5``). A missing field is simply left
+    out, never invented: no year, no part, or no equivalent
     in the input means none in the expanded records either.
     Codes that do not expand: a single part, a degenerate
-    ``1-1`` (B == A), and codes with any number of parts other
-    than two. Note the trade-off the user accepted: a bare
-    ``4-41`` code now also expands to 4..41, even though in
-    international numbering some such codes are a single
-    hierarchical document; the catalog rule overrides that reading.
+    ``1-1``, and -- crucially -- a bare hyphen code
+    ``MAIN-A-B`` with no range/list words. Per the standard's
+    numbering, ``MAIN-1-10`` is Part 1, Chapter 10, a single
+    document (``EN 1993-1-10``, ``TCVN 7447-4-41``), not a
+    range, so it keeps its single record with parts ``"A-B"``.
+    An earlier version expanded bare hyphen codes as ranges;
+    that was wrong and was reverted.
 
     Each expanded record keeps the original's organization, main
     number, year, suffix, confidence and verified flag, but has

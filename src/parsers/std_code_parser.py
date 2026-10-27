@@ -183,16 +183,53 @@ def _short_year(org_normalized, org_prefix, token: str):
 def _parse_remainder(rest: str, org_normalized, org_prefix):
     """Parse everything after the main number.
 
-    Returns (parts, year, suffix). Parts are hyphen groups that are not
-    a year; year may come after ':', '-', '/', or a space; anything
-    after a resolved year that is not another year is a suffix.
+    Returns (parts, year, suffix, has_comma_list). Parts are hyphen
+    groups that are not a year; year may come after ':', '-', '/',
+    or a space; anything after a resolved year that is not another
+    year is a suffix. A comma list after a hyphen part, e.g.
+    "13566-1,2,3,4,5:2022", adds each comma number as a part
+    (has_comma_list=True), so the following ":2022" still parses
+    as the year instead of being lost with the list, as it used
+    to be: the loop previously stopped at the first comma and
+    kept ",2,3,4,5:2022" as a suffix. "và"/"and" before the last
+    number ("1, 2 và 5") is treated the same way. A comma number
+    that is a 4-digit year is treated as the year, not a part.
     """
     parts: list[str] = []
     year = None
     suffix = None
+    has_comma_list = False
     s = (rest or "").strip()
 
     while s:
+        if s.startswith(",") and parts:
+            m = re.match(r",\s*(\d+)(.*)$", s, re.DOTALL)
+            if not m:
+                suffix = s
+                break
+            num, after = m.group(1), m.group(2).strip()
+            if _is_year_token(num) and year is None:
+                year = int(num)
+                s = after
+                continue
+            parts.append(num)
+            has_comma_list = True
+            s = after
+            continue
+        if (s.startswith("VÀ ") or s.startswith("AND ")) and parts:
+            m = re.match(r"(?:VÀ|AND)\s+(\d+)(.*)$", s, re.DOTALL)
+            if not m:
+                suffix = s
+                break
+            num, after = m.group(1), m.group(2).strip()
+            if _is_year_token(num) and year is None:
+                year = int(num)
+                s = after
+                continue
+            parts.append(num)
+            has_comma_list = True
+            s = after
+            continue
         if s.startswith(":"):
             m = re.match(r":\s*(\d{4})\b(.*)$", s, re.DOTALL)
             if m and year is None and _is_year_token(m.group(1)):
@@ -247,7 +284,7 @@ def _parse_remainder(rest: str, org_normalized, org_prefix):
         suffix = s
         break
 
-    return parts, year, suffix
+    return parts, year, suffix, has_comma_list
 
 
 def _extract_series_letter(org_part: str):
@@ -516,12 +553,15 @@ def parse_standard_code(raw_code: str) -> dict:
         # Part-expansion provenance, for the pipeline's per-part
         # expansion. "range" = every part between two endpoints
         # (e.g. "1 đến 10"), "list" = exactly the listed parts
-        # (e.g. "các phần 1, 2, 5, 6, 7"), "bare_range" = a bare
-        # hyphen code "MAIN-A-B" with B > A, which the user's
-        # catalog rule reads as a range A..B (e.g. "EN 1993-1-10"
-        # -> parts 1..10), None = a single part, a degenerate
-        # "1-1", or any other number of parts, which is not
-        # expanded. expanded_parts is the per-part list when
+        # (e.g. "các phần 1, 2, 5, 6, 7" or a comma list
+        # "MAIN-1,2,3,4,5"), None = any other case, which is not
+        # expanded. In particular, a bare hyphen code "MAIN-A-B"
+        # is NOT a range: per the standard's numbering it is
+        # Part A, Chapter B (e.g. "EN 1993-1-10" is Part 1,
+        # Chapter 10, a single document), so it keeps its single
+        # record with parts "A-B". An earlier version expanded
+        # bare hyphen codes as ranges; that was wrong and was
+        # reverted. expanded_parts is the per-part list when
         # expansion applies, else None.
         "parts_kind": None,
         "expanded_parts": None,
@@ -592,9 +632,16 @@ def parse_standard_code(raw_code: str) -> dict:
     # Vietnamese range outside parentheses first, e.g.
     # "TCVN 13566 từ 1 đến 10:2019" -> range ["1", "10"], rest ":2019".
     range_from_rest, rest_cleaned = _extract_vietnamese_range_from_rest(rest)
-    parts, year, suffix = _parse_remainder(rest_cleaned, org_norm, org_part)
+    parts, year, suffix, has_comma_list = _parse_remainder(rest_cleaned, org_norm, org_part)
     parts_kind = None
     expanded_parts = None
+    if has_comma_list and len(parts) >= 2:
+        # Comma list written after the first part, e.g.
+        # "TCVN 13566-1,2,3,4,5:2022" -> parts 1, 2, 3, 4, 5,
+        # year 2022. Exactly the listed parts, nothing between
+        # them that was not listed (a list, not a range).
+        parts_kind = "list"
+        expanded_parts = _expanded_parts_for(parts, "list")
     if range_from_rest and not parts:
         parts = range_from_rest
         parts_kind = "range"
@@ -622,24 +669,10 @@ def parse_standard_code(raw_code: str) -> dict:
         expanded_parts = None
         if parts_kind not in ("range", "list"):
             parts_kind = None
-    # Bare hyphen range, per the user's catalog rule: a code
-    # written "ORG MAIN-A-B" with no range/list words is a range
-    # from part A to part B, e.g. "EN 1993-1-10" -> parts 1..10
-    # and "ISO 9001-1-10:2015" -> ISO 9001-1:2015 .. ISO 9001-10:2015.
-    # This is the user's explicit definition of a complete code
-    # (org + main + part + year + optional equivalent; a missing
-    # field is simply left out, never invented), and it overrides
-    # the international reading under which some such codes are a
-    # single hierarchical document (EN 1993-1-10 is also a single
-    # Eurocode document). Only two-part codes with B > A expand;
-    # a degenerate "1-1" (B == A) and codes with any other number
-    # of parts do not. The same 100-part / part <= 999 guards
-    # apply, so e.g. a "4-41" code expands to 4..41 (38 parts).
-    if parts_kind is None and expanded_parts is None and len(parts) == 2:
-        bare_expanded = _expand_range_parts(parts)
-        if bare_expanded and len(bare_expanded) >= 2:
-            parts_kind = "bare_range"
-            expanded_parts = bare_expanded
+    # No bare hyphen expansion: "MAIN-A-B" with no range/list
+    # words is Part A, Chapter B, a single document (e.g.
+    # "EN 1993-1-10" is Part 1, Chapter 10), not a range A..B.
+    # It therefore keeps parts_kind None and its single record.
     result["parts_kind"] = parts_kind
     result["expanded_parts"] = expanded_parts
     result["std_parts"] = parts

@@ -2,15 +2,17 @@
 
 See PIPELINE.md "Part expansion" for the full rule. An explicit
 range ("1 đến 10", "1-10" in a part note, "từ 1 đến 10"), an
-explicit list ("các phần 1, 2, 5, 6, 7"), AND a bare hyphen
-code "MAIN-A-B" with B > A all expand, per the user's catalog
-rule: a complete code is org + main + part + year + optional
-equivalent, a missing field is simply left out (never invented),
-and "EN 1993-1-10" means parts 1..10, not a single hierarchical
-document. The trade-off is explicit: a bare "4-41" code now
-also expands to 4..41. What does NOT expand: a single part, a
-degenerate "1-1" (B == A), and codes with any number of parts
-other than two.
+explicit list in a part note ("các phần 1, 2, 5, 6, 7"), and
+a comma list written after the first part ("MAIN-1,2,3,4,5")
+all expand. A complete code is org + main + part + year +
+optional equivalent; a missing field is simply left out, never
+invented. What does NOT expand: a bare hyphen code "MAIN-A-B"
+with no range/list words -- per the standard's numbering it is
+Part A, Chapter B, a single document (e.g. "EN 1993-1-10" is
+Part 1, Chapter 10, and "TCVN 7447-4-41:2010" is Part 4,
+Chapter 41) -- a single part, and a degenerate "1-1".
+An earlier version expanded bare hyphen codes as ranges; that
+was wrong and was reverted.
 """
 
 import pytest
@@ -31,24 +33,35 @@ def test_parser_marks_range_and_list_for_expansion():
     assert list_parsed["expanded_parts"] == ["1", "2", "5", "6", "7"]
 
 
-def test_parser_marks_bare_range_for_expansion():
-    # Bare hyphen codes, per the user's catalog rule: "MAIN-A-B"
-    # with B > A is a range A..B, even with no range/list words.
-    for text, expected in (
-        ("ISO 9001-1-10:2015", [str(n) for n in range(1, 11)]),
-        ("EN 1993-1-10", [str(n) for n in range(1, 11)]),
-        ("BS EN 13146-1-10", [str(n) for n in range(1, 11)]),
+def test_parser_marks_comma_list_for_expansion():
+    # Comma list written after the first part, with the year
+    # after the list still parsed as the year.
+    parsed = parse_standard_code("TCVN 13566-1,2,3,4,5:2022")
+    assert parsed["std_parts"] == ["1", "2", "3", "4", "5"]
+    assert parsed["std_year"] == 2022
+    assert parsed["parts_kind"] == "list"
+    assert parsed["expanded_parts"] == ["1", "2", "3", "4", "5"]
+
+    parsed = parse_standard_code("TCVN 13566-1, 2, 3, 4 và 5:2022")
+    assert parsed["std_parts"] == ["1", "2", "3", "4", "5"]
+    assert parsed["std_year"] == 2022
+    assert parsed["parts_kind"] == "list"
+
+
+def test_parser_does_not_mark_bare_hyphen_for_expansion():
+    # Bare hyphen codes are Part A, Chapter B, a single
+    # document -- NOT a range. This reverts PR #11, which
+    # expanded them as ranges.
+    for text, parts in (
+        ("ISO 9001-1-10:2015", ["1", "10"]),
+        ("EN 1993-1-10", ["1", "10"]),
+        ("BS EN 13146-1-10", ["1", "10"]),
+        ("TCVN 7447-4-41:2010", ["4", "41"]),
     ):
         parsed = parse_standard_code(text)
-        assert parsed["parts_kind"] == "bare_range"
-        assert parsed["expanded_parts"] == expected
-
-    # The trade-off, stated explicitly: a bare "4-41" code is
-    # read the same way, so it expands to 4..41 (38 parts).
-    wide = parse_standard_code("TCVN 7447-4-41:2010")
-    assert wide["std_parts"] == ["4", "41"]
-    assert wide["parts_kind"] == "bare_range"
-    assert wide["expanded_parts"] == [str(n) for n in range(4, 42)]
+        assert parsed["std_parts"] == parts
+        assert parsed["parts_kind"] is None
+        assert parsed["expanded_parts"] is None
 
 
 def test_parser_does_not_expand_degenerate_or_other_part_counts():
@@ -107,25 +120,43 @@ def test_process_text_keeps_suffix_on_every_expanded_part():
     assert all(r["suffix"] == "AC:2009" for r in records)
 
 
-def test_process_text_expands_bare_range():
-    # The user's exact failing case: ISO 9001-1-10:2015 now
-    # expands to 10 records, year kept on every part.
-    records = process_text("ISO 9001-1-10:2015", use_ai_fallback=False)
+def test_process_text_expands_comma_list():
+    # The previously failing form: a comma list after the
+    # first part used to yield only part 1 and lose the year.
+    records = process_text("TCVN 13566-1,2,3,4,5:2022", use_ai_fallback=False)
     assert [r["corrected_code"] for r in records] == [
-        f"ISO 9001-{n}:2015" for n in range(1, 11)
+        f"TCVN 13566-{n}:2022" for n in range(1, 6)
     ]
+    assert all(r["year"] == 2022 for r in records)
 
-    # EN 1993-1-10, per the user's rule, is EN 1993-1 .. -10
-    # (no year in the input, so none is invented).
-    records = process_text("EN 1993-1-10", use_ai_fallback=False)
+    records = process_text("EN 13481-1,2,3,4,5", use_ai_fallback=False)
     assert [r["corrected_code"] for r in records] == [
-        f"EN 1993-{n}" for n in range(1, 11)
+        f"EN 13481-{n}" for n in range(1, 6)
     ]
     assert all(r["year"] is None for r in records)
 
-    records = process_text("BS EN 13146-1-10", use_ai_fallback=False)
-    assert len(records) == 10
-    assert records[-1]["corrected_code"] == "EN 13146-10"
+
+def test_process_text_keeps_bare_hyphen_single():
+    # Bare hyphen codes stay single records: Part A, Chapter B.
+    # This is the PR #11 revert, verified on the codes that
+    # PR #11 wrongly expanded.
+    for text, code, parts in (
+        ("ISO 9001-1-10:2015", "ISO 9001-1-10:2015", "1-10"),
+        ("EN 1993-1-10", "EN 1993-1-10", "1-10"),
+        ("TCVN 7447-4-41:2010", "TCVN 7447-4-41:2010", "4-41"),
+    ):
+        records = process_text(text, use_ai_fallback=False)
+        assert len(records) == 1
+        assert records[0]["corrected_code"] == code
+        assert records[0]["parts"] == parts
+
+
+def test_process_text_keeps_comma_separated_codes_separate():
+    # A comma between two full codes is not a part list.
+    records = process_text("TCVN 1234:2020, TCVN 5678:2021", use_ai_fallback=False)
+    assert [r["corrected_code"] for r in records] == [
+        "TCVN 1234:2020", "TCVN 5678:2021",
+    ]
 
 
 def test_process_text_keeps_degenerate_code_single():
