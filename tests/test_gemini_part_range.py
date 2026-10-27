@@ -57,11 +57,16 @@ def test_version_note_is_not_a_part():
 
 def test_process_text_keeps_parenthetical_part_range():
     # End-to-end via --text / document extraction: the extractor must
-    # not strip "(các phần 1-6)" before the parser sees it.
+    # not strip "(các phần 1-6)" before the parser sees it. Since
+    # part expansion landed, the range now yields one record per
+    # part instead of a single "1-6" record; the single-record
+    # form is still what process_candidate returns (see
+    # test_expand_parts).
     records = process_text("Áp dụng TCVN 13566:2022 (các phần 1-6).")
-    assert len(records) == 1
-    assert records[0]["raw_text"] == "TCVN 13566:2022 (các phần 1-6)"
-    assert records[0]["parts"] == "1-6"
+    assert [r["corrected_code"] for r in records] == [
+        f"TCVN 13566-{n}:2022" for n in range(1, 7)
+    ]
+    assert all(r["year"] == 2022 for r in records)
 
 
 def test_code_parts_win_over_parenthetical():
