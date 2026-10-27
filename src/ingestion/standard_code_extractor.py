@@ -23,7 +23,14 @@ _STANDARD_CODE_CORE = (
     r"(?:TCVN(?:\s*/\s*ISO)?|QCVN|TCCS|ISO(?:\s*/\s*IEC)?|"
     r"IEC|EN(?:\s+ISO)?|BS(?:\s+EN)?|ASTM|JIS|DIN|ANSI|ASME|IEEE|"
     r"SAE|API|AASHTO|AWWA|UL|GB|ГОСТ)\s*[-:]?\s*"
-    r"(?:[A-Z]{1,6}\s*)?\d{1,6}(?:[./-]\d{1,6})*"
+    # Spaces around the hyphen/dot/slash separators are just
+    # spacing, e.g. "ISO 3452 -1 đến 6" is ISO 3452, part range
+    # 1-6. The deterministic parser already handles that form,
+    # but without \s* here the candidate stopped at the main
+    # number ("ISO 3452"), so an equivalent code inside
+    # parentheses lost its parts and its parenthetical was
+    # stripped as prose instead of being kept as an equivalent.
+    r"(?:[A-Z]{1,6}\s*)?\d{1,6}(?:\s*[./-]\s*\d{1,6})*"
     # Optional comma list after the first part, e.g.
     # "TCVN 13566-1,2,3,4,5:2022" or "1, 2, 3, 4 và 5".
     # Each comma number is 1-3 digits followed by a non-digit,

@@ -111,6 +111,14 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
      trailing parenthesis is handled the same way. A single
      `process_candidate` call on the whole string keeps the outer
      code correct and names the equivalent in `explanation`.
+   - A space before/after the hyphen does not change the code:
+     `ISO 3452 -1 đến 6` is ISO 3452, parts `1-6`. Detection:
+     a parenthetical is an equivalent code when it starts with
+     an organisation + main number (it is emitted as its own
+     records and expanded the same way as the outer code);
+     a parenthetical with no organisation + main number, e.g.
+     `(các phần từ 1 - 6)`, is a part note for the outer code
+     only and produces no extra record.
 
 3. **Gemini fallback** — `src/ai/gemini_standard_normalizer.py`
    - Triggered for score < 0.8 or a parse failure, and enabled by
