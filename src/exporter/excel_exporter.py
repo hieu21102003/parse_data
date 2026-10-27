@@ -1,15 +1,15 @@
 """Export pipeline results to a formatted Excel (.xlsx) file.
 
-Exactly seven columns, in this order, and nothing else -- in
+Exactly eight columns, in this order, and nothing else -- in
 particular no ``confidence_score`` or ``explanation`` column, even
 though the pipeline's JSON records carry those fields:
 
-    Raw Text | Corrected Code | Organization | Main Number
-    | Year | Parts | Suffix
+    Raw Text | Corrected Code | Standard Name | Organization
+    | Main Number | Year | Parts | Suffix
 
 Formatting, as specified:
   - Header row: navy fill, white bold text, centered.
-  - Data rows: left-aligned for Raw Text and Corrected Code,
+  - Data rows: left-aligned for Raw Text, Corrected Code and Standard Name,
     centered for Organization, Main Number, Year, Parts and Suffix.
   - Column widths are set from the content length (header and
     cells), with a small padding and a cap so one very long code
@@ -29,6 +29,7 @@ from openpyxl.utils import get_column_letter
 COLUMNS = (
     ("Raw Text", "raw_text", "left"),
     ("Corrected Code", "corrected_code", "left"),
+    ("Standard Name", "standard_name", "left"),
     ("Organization", "organization", "center"),
     ("Main Number", "main_number", "center"),
     ("Year", "year", "center"),
@@ -39,7 +40,7 @@ COLUMNS = (
 HEADER_FILL = PatternFill(start_color="000080", end_color="000080", fill_type="solid")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
 HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center", wrap_text=True)
-# Data cells are vertically centered; Raw Text / Corrected Code wrap
+# Data cells are vertically centered; text columns wrap
 # so a long compound code is still readable when the width is capped.
 MAX_COLUMN_WIDTH = 80
 _WIDTH_PADDING = 2

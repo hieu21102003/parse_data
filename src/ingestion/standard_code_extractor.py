@@ -19,9 +19,8 @@ except ModuleNotFoundError:
 
 # This is a candidate finder, not a validity check. Add organization prefixes
 # here as new source documents introduce additional standards bodies.
-STANDARD_CODE_PATTERN = re.compile(
-    r"(?<![A-Z0-9])"
-    r"(?P<code>(?:TCVN(?:\s*/\s*ISO)?|QCVN|TCCS|ISO(?:\s*/\s*IEC)?|"
+_STANDARD_CODE_CORE = (
+    r"(?:TCVN(?:\s*/\s*ISO)?|QCVN|TCCS|ISO(?:\s*/\s*IEC)?|"
     r"IEC|EN(?:\s+ISO)?|BS(?:\s+EN)?|ASTM|JIS|DIN|ANSI|ASME|IEEE|"
     r"SAE|API|AASHTO|AWWA|UL|GB|ГОСТ)\s*[-:]?\s*"
     r"(?:[A-Z]{1,6}\s*)?\d{1,6}(?:[./-]\d{1,6})*"
@@ -34,14 +33,53 @@ STANDARD_CODE_PATTERN = re.compile(
     # NOT captured as a part range.
     r"(?:\s*(?:từ|from)\s*-?\s*\d{1,3}(?!\d)\s*(?:đến|tới|to)\s*(?:phần\s*)?\d{1,3}(?!\d)(?:\s*:\s*\d{4})?)?"
     r"(?:\s*(?:đến|tới)\s*(?:phần\s*)?\d{1,3}(?!\d)(?:\s*:\s*\d{4})?)?"
-    # Optional parenthetical note, e.g. "(các phần 1-6)". It must be
-    # captured, not dropped: the parser turns a part-range note into
-    # parts, and Gemini's prompt treats it as a part range, not a
-    # version. Without this group, --text / document runs would lose
-    # the note before the parser ever saw it.
-    r"(?:\s*\([^)]*\))?)",
+)
+_STANDARD_CODE_PREFIX = r"(?<![A-Z0-9])(?P<code>"
+STANDARD_CODE_BASE_PATTERN = re.compile(
+    _STANDARD_CODE_PREFIX + _STANDARD_CODE_CORE + r")",
     re.IGNORECASE,
 )
+# Keep a possible parenthetical note available to the parser, but validate it
+# before returning it as part of raw_text. A broad [^)]* here used to swallow
+# whole descriptions (and every later part code) into one candidate.
+STANDARD_CODE_PATTERN = re.compile(
+    _STANDARD_CODE_PREFIX + _STANDARD_CODE_CORE + r"(?:\s*\([^)]*\))?)",
+    re.IGNORECASE,
+)
+
+_PART_NOTE = re.compile(
+    r"(?:"
+    r"(?:các\s+)?phần(?:\s+từ)?\s*-?\s*\d{1,3}"
+    r"(?:\s*(?:-|đến|tới|to|,|và)\s*(?:phần\s*)?\d{1,4})*"
+    r"|parts?\s*-?\s*\d{1,3}(?:\s*(?:-|to|,|and)\s*\d{1,4})*"
+    r"|(?:từ|from)\s*-?\s*\d{1,3}\s*(?:đến|tới|to)\s*\d{1,3}"
+    r"(?:\s*[,;]\s*(?:19|20|21)\d{2})?"
+    r"|(?:rev(?:ision)?|version|bản\s+sửa\s+đổi|amendment)\s*[\w.-]+"
+    r"|(?:19|20|21)\d{2}"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def clean_code_candidate(raw_code: str) -> str:
+    """Strip arbitrary prose accidentally captured as a parenthetical note."""
+    raw_code = re.sub(r"\s+", " ", raw_code or "").strip(" .;,|\t\r\n")
+    open_paren = raw_code.find("(")
+    if open_paren < 0 or not raw_code.endswith(")"):
+        return raw_code
+
+    note = raw_code[open_paren + 1:-1].strip()
+    if _PART_NOTE.fullmatch(note):
+        return raw_code
+
+    # Parenthetical equivalents are retained only when the note consists
+    # entirely of one or more standard codes, without descriptive prose.
+    remainder = STANDARD_CODE_BASE_PATTERN.sub("", note)
+    remainder = re.sub(r"[\s,;|&+]+", "", remainder)
+    if not remainder and STANDARD_CODE_BASE_PATTERN.search(note):
+        return raw_code
+
+    return raw_code[:open_paren].rstrip()
 
 
 def _text(value) -> str:
@@ -53,6 +91,64 @@ def _text(value) -> str:
     except (TypeError, ValueError):
         pass
     return str(value).replace("\xa0", " ").strip()
+
+
+_TITLE_HEADER = re.compile(
+    r"(?:tên(?:\s+tiêu\s+chuẩn)?|tên\s+gọi|tiêu\s+đề|title|standard\s+name|name|description|mô\s+tả)",
+    re.IGNORECASE,
+)
+_CODE_HEADER = re.compile(
+    r"(?:mã|ký\s+hiệu|code|standard\s+number|standard\s+code|số\s+hiệu)",
+    re.IGNORECASE,
+)
+_NON_TITLE = re.compile(
+    r"^(?:stt|no\.?|số\s+tt|mã(?:\s+tiêu\s+chuẩn)?|ký\s+hiệu|code|standard\s+code|"
+    r"năm|year|ghi\s+chú|note|đơn\s+vị|tình\s+trạng)$",
+    re.IGNORECASE,
+)
+
+
+def _find_title_column(rows) -> int | None:
+    """Return a title/name column from a table header, if one is present."""
+    for row in list(rows)[:10]:
+        values = [_text(value) for value in row]
+        if not any(_CODE_HEADER.search(value) for value in values):
+            continue
+        for index, value in enumerate(values):
+            if _TITLE_HEADER.search(value):
+                return index
+    return None
+
+
+def _standard_name_from_row(cells, title_column: int | None = None) -> str | None:
+    """Best-effort title association for one table row.
+
+    Prefer a column explicitly labeled as a standard title. For headerless
+    tables, remove code-shaped text and use the clearest remaining text cell.
+    """
+    values = [_text(cell) for cell in cells]
+    if title_column is not None and title_column < len(values):
+        title = values[title_column]
+        if title and not _TITLE_HEADER.fullmatch(title):
+            return title
+
+    candidates = []
+    for value in values:
+        if not value or _NON_TITLE.fullmatch(value):
+            continue
+        residual = STANDARD_CODE_PATTERN.sub(" ", value)
+        residual = re.sub(r"[|;,:()\-–—]+", " ", residual)
+        residual = re.sub(r"\s+", " ", residual).strip()
+        # If the code occupied the whole cell, this cell is not a title.
+        if residual and not _TITLE_HEADER.fullmatch(residual) and not residual.isdigit():
+            candidates.append(residual)
+        elif not STANDARD_CODE_PATTERN.search(value) and len(value) > 4:
+            candidates.append(value)
+    if not candidates:
+        return None
+    # The table's name/description is usually the longest meaningful text
+    # cell; numeric identifiers and short labels have already been excluded.
+    return max(candidates, key=len)
 
 
 def _inner_codes_from_parentheticals(raw_code: str) -> list[str]:
@@ -68,15 +164,15 @@ def _inner_codes_from_parentheticals(raw_code: str) -> list[str]:
     inner = []
     outer_key = re.sub(r"\s+", " ", raw_code).strip().upper()
     for note in re.findall(r"\(([^)]*)\)", raw_code):
-        for match in STANDARD_CODE_PATTERN.finditer(note):
-            code = re.sub(r"\s+", " ", match.group("code")).strip(" .;,|\t\r\n")
+        for match in STANDARD_CODE_BASE_PATTERN.finditer(note):
+            code = clean_code_candidate(match.group("code"))
             if code and re.sub(r"\s+", " ", code).strip().upper() != outer_key:
                 inner.append(code)
     # Unclosed trailing parenthetical: "(BS EN ... 2019" with no ")".
     if "(" in raw_code and raw_code.count("(") > raw_code.count(")"):
         tail = raw_code.rsplit("(", 1)[-1]
-        for match in STANDARD_CODE_PATTERN.finditer(tail):
-            code = re.sub(r"\s+", " ", match.group("code")).strip(" .;,|\t\r\n")
+        for match in STANDARD_CODE_BASE_PATTERN.finditer(tail):
+            code = clean_code_candidate(match.group("code"))
             if code and re.sub(r"\s+", " ", code).strip().upper() != outer_key:
                 inner.append(code)
     return inner
@@ -85,7 +181,8 @@ def _inner_codes_from_parentheticals(raw_code: str) -> list[str]:
 def _extract_from_text(text: str, source: dict, use_ai_fallback: bool) -> list[dict]:
     found = []
     for match in STANDARD_CODE_PATTERN.finditer(text or ""):
-        raw_code = re.sub(r"\s+", " ", match.group("code")).strip(" .;,|\t\r\n")
+        matched_code = match.group("code")
+        raw_code = clean_code_candidate(matched_code)
         if not raw_code:
             continue
         parsed = (
@@ -96,13 +193,23 @@ def _extract_from_text(text: str, source: dict, use_ai_fallback: bool) -> list[d
         found.append({"code": raw_code, **source, "parsed": parsed})
         # Emit the equivalent code(s) inside the parentheses as
         # their own records, with their own range and year intact.
-        for inner_code in _inner_codes_from_parentheticals(raw_code):
+        for inner_code in _inner_codes_from_parentheticals(matched_code):
             inner_parsed = (
                 parse_standard_code_with_ai_fallback(inner_code)
                 if use_ai_fallback
                 else parse_standard_code(inner_code)
             )
             found.append({"code": inner_code, **source, "parsed": inner_parsed})
+    return found
+
+
+def _extract_from_cells(cells, source: dict, use_ai_fallback: bool) -> list[dict]:
+    """Scan cells independently so a title cell never joins a code candidate."""
+    found = []
+    for cell in cells:
+        value = _text(cell)
+        if value:
+            found.extend(_extract_from_text(value, source, use_ai_fallback))
     return found
 
 
@@ -143,13 +250,18 @@ def extract_standard_codes_from_pdf(file_path, use_ai_fallback=False) -> list[di
             ))
 
             # Table extraction can preserve row groupings that plain text loses.
-            for row_number, row in enumerate(page.extract_tables() or [], start=1):
-                row_text = " | ".join(_text(cell) for cell in row if _text(cell))
-                records.extend(_extract_from_text(
-                    row_text,
-                    {"file": str(path), "page": page_number, "row": row_number},
-                    use_ai_fallback,
-                ))
+            for table_number, table in enumerate(page.extract_tables() or [], start=1):
+                title_column = _find_title_column(table)
+                for row_number, row in enumerate(table, start=1):
+                    records.extend(_extract_from_cells(
+                        row,
+                        {
+                            "file": str(path), "page": page_number,
+                            "table": table_number, "row": row_number,
+                            "standard_name": _standard_name_from_row(row, title_column),
+                        },
+                        use_ai_fallback,
+                    ))
     return _deduplicate(records)
 
 
@@ -165,11 +277,17 @@ def extract_standard_codes_from_excel(file_path, use_ai_fallback=False) -> list[
 
     records = []
     for sheet_name, frame in sheets.items():
+        rows = frame.values.tolist()
+        title_column = _find_title_column(rows)
         for row_index, values in frame.iterrows():
-            row_text = " | ".join(value for value in (_text(v) for v in values) if value)
-            records.extend(_extract_from_text(
-                row_text,
-                {"file": str(path), "sheet": sheet_name, "row": int(row_index) + 1},
+            cells = [_text(value) for value in values]
+            records.extend(_extract_from_cells(
+                cells,
+                {
+                    "file": str(path), "sheet": sheet_name,
+                    "row": int(row_index) + 1,
+                    "standard_name": _standard_name_from_row(cells, title_column),
+                },
                 use_ai_fallback,
             ))
     return _deduplicate(records)
@@ -199,11 +317,18 @@ def extract_standard_codes_from_docx(file_path, use_ai_fallback=False) -> list[d
         ))
 
     for table_number, table in enumerate(doc.tables, start=1):
+        table_rows = [[cell.text for cell in row.cells] for row in table.rows]
+        title_column = _find_title_column(table_rows)
         for row_number, row in enumerate(table.rows, start=1):
-            row_text = " | ".join(_text(cell.text) for cell in row.cells if _text(cell.text))
-            records.extend(_extract_from_text(
-                row_text,
-                {"file": str(path), "paragraph": None, "table": table_number, "row": row_number},
+            records.extend(_extract_from_cells(
+                [cell.text for cell in row.cells],
+                {
+                    "file": str(path), "paragraph": None,
+                    "table": table_number, "row": row_number,
+                    "standard_name": _standard_name_from_row(
+                        table_rows[row_number - 1], title_column
+                    ),
+                },
                 use_ai_fallback,
             ))
     return _deduplicate(records)

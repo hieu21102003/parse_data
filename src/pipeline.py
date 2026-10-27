@@ -14,8 +14,8 @@ Flow (see docs/PIPELINE.md):
      simulated. Its result always stays ``verified=False`` and
      carries an ``explanation``. Pass ``use_ai_fallback=False``
      (CLI: ``--no-ai-fallback``) only to run fully offline.
-  4. Output is a JSON array with exactly the fields in the spec:
-     raw_text, corrected_code, organization, main_number, year, parts,
+  4. Output is a JSON array with fields:
+     raw_text, corrected_code, standard_name, organization, main_number, year, parts,
      suffix, confidence_score, verified, explanation.
 
 Run from the repo root, e.g.:
@@ -43,13 +43,17 @@ from pathlib import Path
 
 try:
     from src.ingestion.standard_code_extractor import (
+        STANDARD_CODE_BASE_PATTERN,
         STANDARD_CODE_PATTERN,
+        clean_code_candidate,
         extract_standard_codes,
     )
     from src.parsers.std_code_parser import parse_standard_code
 except ModuleNotFoundError:  # running with src/ itself on PYTHONPATH
     from ingestion.standard_code_extractor import (  # type: ignore
+        STANDARD_CODE_BASE_PATTERN,
         STANDARD_CODE_PATTERN,
+        clean_code_candidate,
         extract_standard_codes,
     )
     from parsers.std_code_parser import parse_standard_code  # type: ignore
@@ -91,6 +95,7 @@ except ImportError as _gemini_import_exc:
 OUTPUT_FIELDS = (
     "raw_text",
     "corrected_code",
+    "standard_name",
     "organization",
     "main_number",
     "year",
@@ -161,6 +166,7 @@ def _record_from_parsed(raw_text: str, parsed: dict, *, verified: bool,
     return {
         "raw_text": raw_text,
         "corrected_code": corrected_code,
+        "standard_name": None,
         "organization": parsed.get("org_normalized") or parsed.get("org_prefix"),
         "main_number": parsed.get("std_main_number"),
         "year": parsed.get("std_year"),
@@ -273,14 +279,14 @@ def _inner_codes_from_parentheticals(raw_text: str) -> list[str]:
     inner = []
     outer_key = re.sub(r"\s+", " ", raw_text).strip().upper()
     for note in re.findall(r"\(([^)]*)\)", raw_text or ""):
-        for match in STANDARD_CODE_PATTERN.finditer(note):
-            code = re.sub(r"\s+", " ", match.group("code")).strip(" .;,|\t\r\n")
+        for match in STANDARD_CODE_BASE_PATTERN.finditer(note):
+            code = clean_code_candidate(match.group("code"))
             if code and re.sub(r"\s+", " ", code).strip().upper() != outer_key:
                 inner.append(code)
     if "(" in (raw_text or "") and raw_text.count("(") > raw_text.count(")"):
         tail = raw_text.rsplit("(", 1)[-1]
-        for match in STANDARD_CODE_PATTERN.finditer(tail):
-            code = re.sub(r"\s+", " ", match.group("code")).strip(" .;,|\t\r\n")
+        for match in STANDARD_CODE_BASE_PATTERN.finditer(tail):
+            code = clean_code_candidate(match.group("code"))
             if code and re.sub(r"\s+", " ", code).strip().upper() != outer_key:
                 inner.append(code)
     return inner
@@ -300,9 +306,10 @@ def process_text(text: str, *, use_ai_fallback: bool = True, ai_suggester=None) 
             raw, use_ai_fallback=use_ai_fallback, ai_suggester=ai_suggester))
 
     for match in STANDARD_CODE_PATTERN.finditer(text or ""):
-        raw = re.sub(r"\s+", " ", match.group("code")).strip(" .;,|\t\r\n")
+        matched_code = match.group("code")
+        raw = clean_code_candidate(matched_code)
         _add(raw)
-        for inner_code in _inner_codes_from_parentheticals(raw):
+        for inner_code in _inner_codes_from_parentheticals(matched_code):
             _add(inner_code)
     return records
 
@@ -321,17 +328,21 @@ def process_document(file_path, *, use_ai_fallback: bool = True, ai_suggester=No
         parsed = item.get("parsed")
         if parsed is not None and parsed.get("verified"):
             equivalent = parsed.get("equivalent_text")
-            records.append(_record_from_parsed(
+            record = _record_from_parsed(
                 raw, parsed, verified=True,
                 explanation="Deterministic parse passed (confidence >= 0.8); no AI correction applied."
                             + (f" Equivalent in parentheses: {equivalent} (kept as a separate "
                                "code in text/document runs; its year is not this code's year)."
                                if equivalent else ""),
-            ))
+            )
+            record["standard_name"] = item.get("standard_name")
+            records.append(record)
         else:
             # Reuse process_candidate for the threshold + Gemini logic.
-            records.append(process_candidate(
-                raw, use_ai_fallback=use_ai_fallback, ai_suggester=ai_suggester))
+            record = process_candidate(
+                raw, use_ai_fallback=use_ai_fallback, ai_suggester=ai_suggester)
+            record["standard_name"] = item.get("standard_name")
+            records.append(record)
     return records
 
 

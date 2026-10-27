@@ -14,6 +14,9 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
    - Excel via `pandas` (every cell, every sheet)
    - Candidates are deduplicated; scanned PDFs with no extractable text
      are skipped (OCR is out of scope).
+   - `raw_text` keeps the matched code and recognized short notes (parts,
+     year, version, or equivalent code). Descriptive parentheticals are
+     excluded from the code text; codes inside them are extracted separately.
 
 2. **Deterministic parsing** — `src/parsers/std_code_parser.py`
    - Weights: org 0.2, main number 0.3, year 0.3, parts 0.1, suffix 0.1.
@@ -98,6 +101,7 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
   {
     "raw_text": "TCVN 1234:2020",
     "corrected_code": "TCVN 1234:2020",
+    "standard_name": null,
     "organization": "TCVN",
     "main_number": "1234",
     "year": 2020,
@@ -168,10 +172,10 @@ Output paths:
   writing it as text corrupts it. JSON output, being text,
   correctly keeps `write_text()`.
 
-The Excel file has exactly seven columns, in this order, and no
+The Excel file has exactly eight columns, in this order, and no
 others (in particular no `confidence_score` or `explanation`):
 
-`Raw Text | Corrected Code | Organization | Main Number | Year | Parts | Suffix`
+`Raw Text | Corrected Code | Standard Name | Organization | Main Number | Year | Parts | Suffix`
 
 Header: navy fill (`000080`), white bold text, centered. Data:
 left-aligned for Raw Text and Corrected Code, centered for the
