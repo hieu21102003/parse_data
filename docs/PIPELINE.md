@@ -17,6 +17,11 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
    - `raw_text` keeps the matched code and recognized short notes (parts,
      year, version, or equivalent code). Descriptive parentheticals are
      excluded from the code text; codes inside them are extracted separately.
+   - When a row's title is a part list (base title plus
+     `Phần 1: …`, `Phần 2: …`, …), each single-part record gets
+     only the base title plus its own part's title
+     (`standard_name_for_parts`); records with no part, a part
+     range, or a part not listed in the title keep the full title.
    - `raw_text` is guaranteed to be exactly one cleaned matched code,
      never a whole row, paragraph or cell string: tables are scanned
      cell by cell (never joined with `" | "`), the extractor emits

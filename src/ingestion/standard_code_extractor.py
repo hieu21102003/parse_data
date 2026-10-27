@@ -218,6 +218,84 @@ def _standard_name_from_row(cells, title_column: int | None = None) -> str | Non
     return max(candidates, key=len)
 
 
+_PART_TITLE_MARKER = re.compile(
+    r"(Phần|Part)\s+(\d{1,3})\s*(?::|：)?",
+    re.IGNORECASE,
+)
+
+
+def _split_part_titles(name: str):
+    """Split a part-list title into (base title, {part number: part title}).
+
+    A title such as::
+
+        Cầu đường sắt khổ 1435, tốc độ đến 350 km/h
+        - Phần 1: Quy định chung, Phần 2: Thiết kế tổng thể, ...
+
+    is one base title plus one title per part. The base is the text
+    before the first ``Phần N`` marker; each part title is the text
+    between its marker and the next marker (or the end of the string),
+    with list separators stripped. Returns ``None`` when the name
+    does not contain at least two part markers, i.e. when it is not
+    a part list at all -- in that case there is nothing to split.
+    """
+    markers = list(_PART_TITLE_MARKER.finditer(name or ""))
+    if len(markers) < 2:
+        return None
+    base = name[:markers[0].start()].strip(" \t\r\n,;:–—-")
+    by_part = {}
+    for index, marker in enumerate(markers):
+        part_number = int(marker.group(2))
+        end = markers[index + 1].start() if index + 1 < len(markers) else len(name)
+        segment = name[marker.end():end].strip(" \t\r\n,;:–—-")
+        if segment and part_number not in by_part:
+            by_part[part_number] = segment
+    if len(by_part) < 2:
+        return None
+    return base, by_part
+
+
+def standard_name_for_parts(name, parsed) -> str | None:
+    """Return the standard name that matches one parsed record's part.
+
+    When ``name`` is a part-list title (see :func:`_split_part_titles`)
+    and the record has exactly one part, the record gets only its
+    own part's title, prefixed with the shared base title::
+
+        TCVN 13594-1:2022 -> "Cầu đường sắt khổ 1435, tốc độ đến
+                              350 km/h - Phần 1: Quy định chung"
+        TCVN 13594-2:2022 -> "Cầu đường sắt khổ 1435, tốc độ đến
+                              350 km/h - Phần 2: Thiết kế tổng thể"
+
+    instead of the whole 10-part list repeated on every row.
+    Every other case falls back to the full name unchanged, so
+    nothing is ever lost by splitting: no part (e.g. ``TCVN
+    13594:2022``), a part range (``std_parts`` has two endpoints,
+    e.g. ``["1", "10"]``), a part number not listed in the title,
+    or a title that is not a part list at all.
+    """
+    if not name or not parsed:
+        return name
+    parts = parsed.get("std_parts") or []
+    if len(parts) != 1:
+        return name
+    try:
+        part_number = int(str(parts[0]).strip())
+    except (TypeError, ValueError):
+        return name
+    split = _split_part_titles(name)
+    if split is None:
+        return name
+    base, by_part = split
+    part_title = by_part.get(part_number)
+    if not part_title:
+        return name
+    word = "Phần" if "phần" in name.lower() else "Part"
+    if base:
+        return f"{base} - {word} {part_number}: {part_title}"
+    return f"{word} {part_number}: {part_title}"
+
+
 def _inner_codes_from_parentheticals(raw_code: str) -> list[str]:
     """Codes hidden inside parentheses of an outer match.
 
@@ -266,7 +344,15 @@ def _extract_from_text(text: str, source: dict, use_ai_fallback: bool) -> list[d
             if use_ai_fallback
             else parse_standard_code(raw_code)
         )
-        found.append({"code": raw_code, **source, "parsed": parsed})
+        record = {"code": raw_code, **source, "parsed": parsed}
+        if "standard_name" in source:
+            # A row's title may be a whole part list; give this
+            # record only the title of its own part (falling back
+            # to the full title when it cannot be matched).
+            record["standard_name"] = standard_name_for_parts(
+                source.get("standard_name"), parsed
+            )
+        found.append(record)
         # Emit the equivalent code(s) inside the parentheses as
         # their own records, with their own range and year intact.
         for inner_code in _inner_codes_from_parentheticals(matched_code):
@@ -275,7 +361,12 @@ def _extract_from_text(text: str, source: dict, use_ai_fallback: bool) -> list[d
                 if use_ai_fallback
                 else parse_standard_code(inner_code)
             )
-            found.append({"code": inner_code, **source, "parsed": inner_parsed})
+            inner_record = {"code": inner_code, **source, "parsed": inner_parsed}
+            if "standard_name" in source:
+                inner_record["standard_name"] = standard_name_for_parts(
+                    source.get("standard_name"), inner_parsed
+                )
+            found.append(inner_record)
     return found
 
 
