@@ -127,7 +127,8 @@ def build_canonical_code(parsed: dict, org=None) -> str | None:
     (default: the normalized org). It exists so an expanded
     record's ``raw_text`` can keep the org exactly as written in
     the source (e.g. ``BS EN``) while ``corrected_code`` uses the
-    normalized org (``EN``).
+    normalized org (``BS EN`` for a BS EN code: combined prefixes
+    are preserved, not reduced to ``EN``).
     """
     main = parsed.get("std_main_number")
     if not main:
@@ -226,7 +227,8 @@ def _expand_record(record: dict, parsed: dict | None) -> list[dict]:
     number, year, suffix, confidence and verified flag, but has
     exactly one part: ``raw_text`` is the expanded code as written
     in the source (original org, e.g. ``BS EN``), ``corrected_code``
-    is the same code with the normalized org (e.g. ``EN``), and
+    is the same code with the normalized org (combined prefixes
+    such as ``BS EN`` are preserved, not reduced to ``EN``), and
     ``standard_name`` -- when present -- is re-split per part, so
     a part-list title also yields only its own part's title.
     The original range/list is noted in ``explanation`` so the

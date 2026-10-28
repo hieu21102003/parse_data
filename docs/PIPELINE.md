@@ -28,8 +28,9 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
      `process_candidate_expanded`; `process_candidate` itself
      still returns the single range record for compatibility):
      `BS EN 13146-1 đến 10:2019` → `BS EN 13146-1:2019` …
-     `BS EN 13146-10:2019` (raw_text keeps `BS EN` as written,
-     corrected_code normalises it to `EN`); `EN 13481 (các phần
+     `BS EN 13146-10:2019` (both raw_text and corrected_code keep
+     `BS EN` as written: the combined prefix is preserved, not
+     reduced to `EN`); `EN 13481 (các phần
      1, 2, 5, 6, 7)` → exactly `EN 13481-1, -2, -5, -6, -7`, with
      no invented parts and no invented year; a comma list written
      after the first part, `TCVN 13566-1,2,3,4,5:2022` → exactly
@@ -110,8 +111,9 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
    - Compound code with an equivalent in parentheses:
      `TCVN 13695-1 đến 10:2023 (BS EN 13146-1 đến 10:2019)` is
      TWO codes, not one. Text/document runs emit both records:
-     `TCVN 13695-1-10:2023` and `EN 13146-1-10:2019` (BS EN
-     normalises to EN), each with its own range and year. The
+     `TCVN 13695-1-10:2023` and `BS EN 13146-1-10:2019` (the
+     `BS EN` prefix is preserved as written), each with its own
+     range and year. The
      hyphen-part plus `đến` rule applies per code (`-1 đến 10`
      -> `1-10`, never `1` alone), the equivalent's numbers are
      never stolen as the outer code's parts/year, and an unclosed

@@ -78,13 +78,13 @@ def test_parser_does_not_expand_degenerate_or_other_part_counts():
 def test_process_text_expands_user_range_example():
     records = process_text("BS EN 13146-1 đến 10:2019", use_ai_fallback=False)
     assert len(records) == 10
-    # raw_text keeps the org as written (BS EN); corrected_code
-    # uses the normalized org (EN), as in the rest of the pipeline.
+    # Both raw_text and corrected_code keep the org as written
+    # (BS EN): the combined prefix is preserved, not reduced to EN.
     assert [r["raw_text"] for r in records] == [
         f"BS EN 13146-{n}:2019" for n in range(1, 11)
     ]
     assert [r["corrected_code"] for r in records] == [
-        f"EN 13146-{n}:2019" for n in range(1, 11)
+        f"BS EN 13146-{n}:2019" for n in range(1, 11)
     ]
     assert [r["parts"] for r in records] == [str(n) for n in range(1, 11)]
     assert all(r["year"] == 2019 for r in records)
@@ -176,13 +176,13 @@ def test_process_text_complete_code_with_equivalent():
     by_code = {r["corrected_code"]: r for r in records}
     assert by_code["TCVN 13695-1:2023"]["year"] == 2023
     assert by_code["TCVN 13695-1:2023"]["parts"] == "1"
-    assert by_code["EN 13146-1:2019"]["year"] == 2019
-    assert by_code["EN 13146-1:2019"]["parts"] == "1"
+    assert by_code["BS EN 13146-1:2019"]["year"] == 2019
+    assert by_code["BS EN 13146-1:2019"]["parts"] == "1"
 
 
 def test_process_candidate_stays_single_record_for_compatibility():
     record = process_candidate("BS EN 13146-1 đến 10:2019", use_ai_fallback=False)
-    assert record["corrected_code"] == "EN 13146-1-10:2019"
+    assert record["corrected_code"] == "BS EN 13146-1-10:2019"
     assert record["parts"] == "1-10"
 
 
