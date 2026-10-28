@@ -43,6 +43,10 @@ def test_output_schema_exact_fields():
     assert record["year"] == 2020
     assert record["parts"] is None
     assert record["suffix"] is None
+    # No hierarchy context for a bare candidate string.
+    assert record["parent_level_1"] is None
+    assert record["parent_level_2"] is None
+    assert record["stt"] is None
     assert isinstance(record["confidence_score"], float)
     assert isinstance(record["verified"], bool)
 

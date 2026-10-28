@@ -84,6 +84,12 @@ ORG_MAP = {
     "IEC": "IEC",
     "TCCS": "TCCS",
     "GB": "GB",
+    # "GB/T" (recommended) and "GB/Z" (guidance) are distinct
+    # designations from a bare "GB": preserve the suffix, the
+    # same rule as "BS EN" / "TCVN EN" above.
+    "GB/T": "GB/T",
+    "GB/Z": "GB/Z",
+    "CISPR": "CISPR",
     "JIS": "JIS",
     "ASTM": "ASTM",
     "IEEE": "IEEE",
@@ -574,7 +580,7 @@ def _extract_vietnamese_range_from_rest(rest: str):
 _EQUIVALENT_ORGS = (
     "TCVN", "QCVN", "TCCS", "ISO", "IEC", "EN", "BS EN", "BS",
     "DIN EN", "DIN", "ASTM", "JIS", "ANSI", "ASME", "IEEE",
-    "SAE", "API", "AASHTO", "AWWA", "UL", "GB",
+    "SAE", "API", "AASHTO", "AWWA", "UL", "GB", "CISPR",
 )
 
 
