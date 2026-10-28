@@ -50,38 +50,52 @@ function renderResults(data, label) {
   wrap.className = "table-wrap";
   const table = document.createElement("table");
   table.className = "results-table";
-  const headers = ["Tên tiêu chuẩn", "Mã trong file", "Mã đã parse", "Tổ chức", "Số hiệu", "Năm", "Phần", "Trạng thái"];
+  const columns = [
+    { key: "stt", label: "STT", className: "col-stt" },
+    { key: "parent_level_1", label: "Cấp 1 (Nhóm)", className: "col-parent-1" },
+    { key: "parent_level_2", label: "Cấp 2 (Tiểu mục)", className: "col-parent-2" },
+    { key: "standard_name", label: "Tên tiêu chuẩn", className: "col-name" },
+    { key: "raw_text", label: "Mã trong file", className: "col-raw" },
+    { key: "corrected_code", label: "Mã đã parse", className: "col-code" },
+    { key: "organization", label: "Tổ chức", className: "col-org" },
+    { key: "main_number", label: "Số hiệu", className: "col-main" },
+    { key: "year", label: "Năm", className: "col-year" },
+    { key: "parts", label: "Phần", className: "col-parts" },
+    { key: "status", label: "Trạng thái", className: "col-status" },
+  ];
   const thead = document.createElement("thead");
   const headerRow = document.createElement("tr");
-  for (const headerText of headers) {
+  for (const col of columns) {
     const th = document.createElement("th");
     th.scope = "col";
-    th.textContent = headerText;
+    th.className = col.className;
+    th.textContent = col.label;
     headerRow.append(th);
   }
   thead.append(headerRow);
   const tbody = document.createElement("tbody");
   for (const record of records) {
     const row = document.createElement("tr");
-    const values = [record.standard_name, record.raw_text, record.corrected_code, record.organization, record.main_number, record.year, record.parts];
-    for (const value of values) {
+    for (const col of columns) {
       const cell = document.createElement("td");
-      cell.textContent = safeText(value);
+      cell.className = col.className;
+      if (col.key === "status") {
+        const badge = document.createElement("span");
+        badge.className = `badge ${record.verified ? "verified" : "unverified"}`;
+        badge.textContent = record.verified ? "Đủ tin cậy" : "Cần đối chiếu";
+        cell.append(badge);
+      } else {
+        cell.textContent = safeText(record[col.key]);
+      }
       row.append(cell);
     }
-    const statusCell = document.createElement("td");
-    const badge = document.createElement("span");
-    badge.className = `badge ${record.verified ? "verified" : "unverified"}`;
-    badge.textContent = record.verified ? "Đủ tin cậy" : "Cần đối chiếu";
-    statusCell.append(badge);
-    row.append(statusCell);
     tbody.append(row);
 
     if (record.explanation) {
       const noteRow = document.createElement("tr");
       noteRow.className = "explanation-row";
       const noteCell = document.createElement("td");
-      noteCell.colSpan = headers.length;
+      noteCell.colSpan = columns.length;
       noteCell.textContent = record.source_file ? `${record.source_file} · ${record.explanation}` : record.explanation;
       noteRow.append(noteCell);
       tbody.append(noteRow);

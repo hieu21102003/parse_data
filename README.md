@@ -109,3 +109,9 @@ PYTHONPATH=src python -m pipeline sample.pdf sample.xlsx -o out.json
 PYTHONPATH=src python -m pipeline --text "TCVN 1234:2020"
  python -m pipeline --text "TCVN 13695-1 đến 10:2023 (BS EN 13146-1 đến 10:2019)" -o /tmp/ket_qua.xlsx
  "C:\Users\hyeu pc\Downloads\2. Thống kê Các tiêu chuẩn Nước ngoài Tổng hợp.xlsx"
+ • Chạy pipeline qua CLI:                                                                                                                                              
+    python -m src.pipeline sample.pdf -o out.json                                                                                                                       
+    python -m src.pipeline --text "TCVN 1234:2020" -o ket_qua.xlsx                                                                                                      
+                                                                                                                                                                        
+  • Chạy Web API & UI:                                                                                                                                                  .venv\Scripts\activate.bat
+    uvicorn src.app.main:app --reload --port 8000 

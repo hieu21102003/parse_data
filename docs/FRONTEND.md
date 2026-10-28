@@ -11,6 +11,8 @@ two same-origin endpoints:
 File results include `standard_name` when the source table has a title/name
 column or the title can be inferred from other cells in that row. Plain text
 input has `standard_name: null` because it has no file row to associate.
+The UI table displays hierarchy context columns (`stt`, `parent_level_1`,
+and `parent_level_2`) alongside standard names, parsed codes, and metadata.
 
 Start from the repository root after installing `requirements.txt`:
 
