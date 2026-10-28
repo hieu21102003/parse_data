@@ -45,6 +45,9 @@ try:
     from src.ingestion.standard_code_extractor import (
         STANDARD_CODE_BASE_PATTERN,
         STANDARD_CODE_PATTERN,
+        _HierarchyContext,
+        _line_contexts,
+        _snapshot_at,
         clean_code_candidate,
         extract_first_clean_code,
         extract_standard_codes,
@@ -55,6 +58,9 @@ except ModuleNotFoundError:  # running with src/ itself on PYTHONPATH
     from ingestion.standard_code_extractor import (  # type: ignore
         STANDARD_CODE_BASE_PATTERN,
         STANDARD_CODE_PATTERN,
+        _HierarchyContext,
+        _line_contexts,
+        _snapshot_at,
         clean_code_candidate,
         extract_first_clean_code,
         extract_standard_codes,
@@ -100,6 +106,12 @@ OUTPUT_FIELDS = (
     "raw_text",
     "corrected_code",
     "standard_name",
+    # Catalog hierarchy context: the nearest section headings above
+    # the code and the row's TT value. None when the source has no
+    # such context (plain-text input, unheaded tables).
+    "parent_level_1",
+    "parent_level_2",
+    "stt",
     "organization",
     "main_number",
     "year",
@@ -167,8 +179,25 @@ def _default_ai_suggester(raw_text: str) -> dict:
     return suggest_standard_code(raw_text)
 
 
+def _attach_hierarchy_context(record: dict, item: dict) -> dict:
+    """Copy a file item's hierarchy context onto a pipeline record.
+
+    ``parent_level_1`` / ``parent_level_2`` are the nearest
+    section headings above the code in its catalog (Roman group
+    / dotted subsection, see the extractor), and ``stt`` is the
+    row's TT value. All three are ``None`` when the source
+    carries no such context (plain-text input, unheaded tables),
+    so the JSON schema stays the same for every record.
+    """
+    record["parent_level_1"] = item.get("parent_level_1")
+    record["parent_level_2"] = item.get("parent_level_2")
+    record["stt"] = item.get("stt")
+    return record
+
+
 def _record_from_parsed(raw_text: str, parsed: dict, *, verified: bool,
-                        explanation: str, corrected_code=None) -> dict:
+                        explanation: str, corrected_code=None,
+                        parent_level_1=None, parent_level_2=None, stt=None) -> dict:
     # Guarantee point for raw_text: the output record's raw_text is
     # always exactly one cleaned matched code, never a row, paragraph
     # or cell string that happened to contain a code. If the input
@@ -193,6 +222,9 @@ def _record_from_parsed(raw_text: str, parsed: dict, *, verified: bool,
         "raw_text": raw_text,
         "corrected_code": corrected_code,
         "standard_name": None,
+        "parent_level_1": parent_level_1,
+        "parent_level_2": parent_level_2,
+        "stt": stt,
         "organization": parsed.get("org_normalized") or parsed.get("org_prefix"),
         "main_number": parsed.get("std_main_number"),
         "year": parsed.get("std_year"),
@@ -388,7 +420,9 @@ def process_candidate(raw_text: str, *, use_ai_fallback: bool = True,
 
 
 def process_candidate_expanded(raw_text: str, *, use_ai_fallback: bool = True,
-                               ai_suggester=None) -> list[dict]:
+                               ai_suggester=None,
+                               parent_level_1=None, parent_level_2=None,
+                               stt=None) -> list[dict]:
     """Like :func:`process_candidate`, but expanding range/list codes.
 
     Returns one record per part for an expandable range/list code
@@ -396,9 +430,16 @@ def process_candidate_expanded(raw_text: str, *, use_ai_fallback: bool = True,
     otherwise. ``process_candidate`` itself stays single-record for
     backward compatibility; :func:`process_text` and
     :func:`process_document` use this expanded form.
+
+    The hierarchy context (``parent_level_1`` / ``parent_level_2``)
+    and ``stt`` are attached before expansion, so every expanded
+    part record carries the same context as the original.
     """
     record = process_candidate(
         raw_text, use_ai_fallback=use_ai_fallback, ai_suggester=ai_suggester)
+    record["parent_level_1"] = parent_level_1
+    record["parent_level_2"] = parent_level_2
+    record["stt"] = stt
     # Re-parse deterministically for the expansion provenance.
     # This adds no Gemini call: it only reads parsed["expanded_parts"].
     cleaned = extract_first_clean_code(raw_text) or (raw_text or "").strip()
@@ -439,6 +480,11 @@ def process_text(text: str, *, use_ai_fallback: bool = True, ai_suggester=None) 
     seen = set()
     seen_expanded = set()
     records = []
+    # Heading lines in the text govern the codes below them, the
+    # same hierarchy context the file extractors track per line.
+    # Plain text has no STT column, so "stt" stays None here.
+    _context = _HierarchyContext()
+    _snapshots = _line_contexts(text or "", _context)
 
     def _append_expanded(expanded):
         if len(expanded) > 1:
@@ -454,20 +500,23 @@ def process_text(text: str, *, use_ai_fallback: bool = True, ai_suggester=None) 
                 return
             records.append(expanded[0])
 
-    def _add(raw):
+    def _add(raw, snapshot):
         key = re.sub(r"\s+", " ", raw).strip().upper()
         if not raw or key in seen:
             return
         seen.add(key)
         _append_expanded(process_candidate_expanded(
-            raw, use_ai_fallback=use_ai_fallback, ai_suggester=ai_suggester))
+            raw, use_ai_fallback=use_ai_fallback, ai_suggester=ai_suggester,
+            parent_level_1=snapshot.get("parent_level_1"),
+            parent_level_2=snapshot.get("parent_level_2")))
 
     for match in STANDARD_CODE_PATTERN.finditer(text or ""):
         matched_code = match.group("code")
         raw = clean_code_candidate(matched_code)
-        _add(raw)
+        snapshot = _snapshot_at(_snapshots, match.start())
+        _add(raw, snapshot)
         for inner_code in _inner_codes_from_parentheticals(matched_code):
-            _add(inner_code)
+            _add(inner_code, snapshot)
     return records
 
 
@@ -501,12 +550,14 @@ def process_document(file_path, *, use_ai_fallback: bool = True, ai_suggester=No
                                if equivalent else ""),
             )
             record["standard_name"] = item.get("standard_name")
+            _attach_hierarchy_context(record, item)
             expanded = _expand_record(record, parsed)
         else:
             # Reuse process_candidate for the threshold + Gemini logic.
             record = process_candidate(
                 raw, use_ai_fallback=use_ai_fallback, ai_suggester=ai_suggester)
             record["standard_name"] = item.get("standard_name")
+            _attach_hierarchy_context(record, item)
             expanded = _expand_record(record, parsed)
         # Range/list codes expand into one record per part, and
         # expanded codes are deduplicated, as in process_text.

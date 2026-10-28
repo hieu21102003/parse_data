@@ -14,6 +14,28 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
    - Excel via `pandas` (every cell, every sheet)
    - Candidates are deduplicated; scanned PDFs with no extractable text
      are skipped (OCR is out of scope).
+   - **Hierarchy context** — catalogs group codes under headings, and
+     every record carries the nearest ones: `parent_level_1` is the
+     Roman-numeral group (`I. Nhóm công trình đường sắt; ...`),
+     `parent_level_2` is the nearest subsection below it (`I.2. Tiêu
+     chuẩn kỹ thuật`, `I.2.1. Chung, tuyến, ...`, or a numbered
+     sub-heading such as `2. Thiết kế`), and `stt` is the row's TT
+     value, verbatim as a string. All three are `null` when the
+     source has no such context (plain-text input, unheaded
+     tables). The spec's `standard_code` is this pipeline's
+     `corrected_code`, and `standard_name` is the row title.
+     Heading rows are recognised in tables (marker in the first
+     cell, title in the next; or a numbered sub-heading in the
+     code column with an empty STT cell), in DOCX heading
+     paragraphs (scanned in document order, so a heading governs
+     the tables after it), and in PDF page text (Roman / dotted
+     markers only). A new level-1 heading clears the subsection;
+     the hierarchy resets per Excel sheet. A row containing a
+     code is never treated as a heading. Deduplication is by
+     code, as before: when the same code text appears twice, the
+     first occurrence's parents win. The Excel export keeps its
+     existing 8 columns; the hierarchy fields are in the JSON
+     output (and the web API records).
    - `raw_text` keeps the matched code and recognized short notes (parts,
      year, version, or equivalent code). Descriptive parentheticals are
      excluded from the code text; codes inside them are extracted separately.

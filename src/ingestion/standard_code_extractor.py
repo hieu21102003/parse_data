@@ -22,7 +22,11 @@ except ModuleNotFoundError:
 _STANDARD_CODE_CORE = (
     r"(?:TCVN(?:\s*/\s*ISO)?|QCVN|TCCS|ISO(?:\s*/\s*IEC)?|"
     r"IEC|EN(?:\s+ISO)?|BS(?:\s+EN)?|ASTM|JIS|DIN|ANSI|ASME|IEEE|"
-    r"SAE|API|AASHTO|AWWA|UL|GB|ГОСТ)\s*[-:]?\s*"
+    # "GB/T" (recommended) and "GB/Z" (guidance) are distinct
+    # Chinese designations, not "GB" plus a suffix: without the
+    # "/T" here a "GB/T 44413-2024" candidate never matched at
+    # all. "CISPR" (IEC radio-interference committee) likewise.
+    r"SAE|API|AASHTO|AWWA|UL|CISPR|GB(?:\s*/\s*[TZ])?|ГОСТ)\s*[-:]?\s*"
     # Spaces around the hyphen/dot/slash separators are just
     # spacing, e.g. "ISO 3452 -1 đến 6" is ISO 3452, part range
     # 1-6. The deterministic parser already handles that form,
@@ -320,6 +324,187 @@ def standard_name_for_parts(name, parsed) -> str | None:
     return f"{word} {part_number}: {part_title}"
 
 
+# -------------------------------------------------
+# Hierarchy context: section headings above the codes.
+#
+# Catalogs ("Danh mục tiêu chuẩn") group codes under headings:
+#   level 1 -- a Roman numeral: "I", "II", "III", ...
+#   level 2 -- a dotted subsection: "I.1", "I.2", "I.2.1",
+#              or the same numbering with Arabic digits ("1.2."),
+#              or a numbered sub-heading in the code column
+#              ("2. Thiết kế") under a level-2 heading.
+# A record carries the nearest heading of each kind in
+# "parent_level_1" / "parent_level_2", plus the row's "stt"
+# (TT column) when the table has one. The spec's JSON calls the
+# code itself "standard_code"; here that is "corrected_code"
+# and the title is "standard_name".
+# -------------------------------------------------
+
+_ROMAN_NUMERAL = re.compile(
+    r"^(M{0,3})(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$"
+)
+
+
+def _is_roman_numeral(value: str) -> bool:
+    """True for a strict Roman numeral (I..XXXIX), nothing else."""
+    if not value:
+        return False
+    match = _ROMAN_NUMERAL.match(value)
+    return bool(match) and any(match.groups())
+
+
+_DOTTED_MARKER = re.compile(r"^(?P<first>[IVXLCDM]+|\d+)(?P<rest>(?:\.\d+)+)\.?$")
+_BARE_NUMBERED = re.compile(r"^(?P<marker>\d{1,2})\.\s+(?P<title>\S.*)$")
+
+
+def parse_heading_text(text: str, *, allow_bare_numbered: bool = False):
+    """Parse one heading line into ``(level, label)`` or ``None``.
+
+    Level 1 is a bare Roman numeral (``I. Nhóm ...``); level 2
+    is a dotted subsection (``I.2.1. Chung ...``, ``1.2. ...``).
+    The label is the marker (trailing dot stripped) plus the
+    title, e.g. ``"I.2.1. Chung, tuyến, ..."``. A bare numbered
+    line (``2. Thiết kế``) is only a heading when
+    ``allow_bare_numbered`` is set: in table rows the empty STT
+    cell makes it structural, while in free text a ``"1. ..."``
+    line is too often an ordinary numbered sentence.
+    """
+    if not text:
+        return None
+    line = re.sub(r"\s+", " ", str(text).replace("\xa0", " ")).strip()
+    if not line:
+        return None
+    # Dotted subsection first: "I.2.1. ..." must not be read as
+    # a bare Roman "I" followed by a title starting with "2.1.".
+    dotted = _DOTTED_MARKER.match(line.split(None, 1)[0]) if " " in line else None
+    if dotted:
+        first, rest = dotted.group("first"), dotted.group("rest")
+        if first.isdigit() or _is_roman_numeral(first):
+            title = line.split(None, 1)[1].strip()
+            if title:
+                marker = (first + rest).rstrip(".")
+                return 2, f"{marker}. {title}"
+    # Bare Roman numeral: "I. Nhóm ..." / "II Nhóm ...".
+    head, _, title = line.partition(" ")
+    roman = head.rstrip(".")
+    if _is_roman_numeral(roman) and title.strip():
+        return 1, f"{roman}. {title.strip()}"
+    # Bare numbered sub-heading, table rows only (see docstring).
+    if allow_bare_numbered:
+        bare = _BARE_NUMBERED.match(line)
+        if bare:
+            return 2, f"{bare.group('marker')}. {bare.group('title').strip()}"
+    return None
+
+
+def _heading_from_row(cells) -> tuple[int, str] | None:
+    """Heading of one table row, or ``None`` when it is not one.
+
+    Heading rows in the real catalogs put the marker in the
+    first cell and the title in the next (``I`` / ``Nhóm ...``,
+    ``I.1`` / ``Quy chuẩn kỹ thuật``), or the whole heading in
+    a single merged cell, or a numbered sub-heading in the code
+    column with an empty STT cell (``""`` / ``2. Thiết kế``).
+    A row containing a standard code is never a heading row:
+    the code is extracted with the current context instead.
+    """
+    values = [_text(cell) for cell in cells]
+    non_empty = [(i, v) for i, v in enumerate(values) if v]
+    if not non_empty:
+        return None
+    joined = " ".join(v for _, v in non_empty)
+    if STANDARD_CODE_PATTERN.search(joined):
+        return None
+    if len(non_empty) == 1:
+        return parse_heading_text(non_empty[0][1], allow_bare_numbered=True)
+    first_index, first = non_empty[0]
+    # Bare marker in the first cell, title in the next one.
+    marker_match = _DOTTED_MARKER.match(first.rstrip("."))
+    pure_roman = _is_roman_numeral(first.rstrip("."))
+    if marker_match or pure_roman:
+        if marker_match:
+            marker_first = marker_match.group("first")
+            if not (marker_first.isdigit() or _is_roman_numeral(marker_first)):
+                return None
+        title = non_empty[1][1]
+        marker = first.rstrip(".")
+        level = 1 if pure_roman and not marker_match else 2
+        return level, f"{marker}. {title}"
+    # Marker and title together in the first cell.
+    parsed = parse_heading_text(first)
+    if parsed:
+        return parsed
+    # Numbered sub-heading sitting in a later column with the
+    # cells before it empty (an empty STT cell in the real files).
+    if first_index > 0:
+        return parse_heading_text(first, allow_bare_numbered=True)
+    return None
+
+
+class _HierarchyContext:
+    """Current section headings while scanning one file (or sheet).
+
+    Level 1 is the Roman-numeral group; ``sub`` is the nearest
+    subsection heading below it. A new level-1 heading clears
+    the subsection; a subsection heading replaces the previous
+    one. ``snapshot()`` is what each code record carries.
+    """
+
+    def __init__(self):
+        self.level1 = None
+        self.sub = None
+
+    def update(self, heading) -> None:
+        level, label = heading
+        if level == 1:
+            self.level1 = label
+            self.sub = None
+        else:
+            self.sub = label
+
+    def snapshot(self) -> dict:
+        return {"parent_level_1": self.level1, "parent_level_2": self.sub}
+
+    def reset(self) -> None:
+        self.level1 = None
+        self.sub = None
+
+
+def _find_stt_column(rows) -> int | None:
+    """Index of the TT/STT column of a table, or ``None``.
+
+    A header row labels its first column ``TT`` (or ``STT``)
+    next to a code/title header. Without such a header the
+    column is not guessed: inventing an STT from a numeric
+    first cell would mislabel heading markers and years.
+    """
+    fallback = None
+    for row in rows or []:
+        values = [_text(value) for value in row]
+        for index, value in enumerate(values):
+            if value.upper() in ("TT", "STT"):
+                if any(_CODE_HEADER.search(v) or _TITLE_HEADER.search(v) for v in values):
+                    return index
+                if fallback is None:
+                    fallback = index
+    return fallback
+
+
+def _stt_from_row(cells, stt_column: int | None) -> str | None:
+    """The row's STT value, verbatim, or ``None``.
+
+    Only a plain integer (optionally with a trailing dot, as
+    some sheets write ``"1."``) in the TT column counts; a
+    heading marker (``I``, ``I.1``) in that column is not an
+    STT, and heading rows never reach this function.
+    """
+    if stt_column is None or stt_column >= len(cells):
+        return None
+    value = _text(cells[stt_column])
+    match = re.fullmatch(r"(\d+)\.?", value)
+    return match.group(1) if match else None
+
+
 def _inner_codes_from_parentheticals(raw_code: str) -> list[str]:
     """Codes hidden inside parentheses of an outer match.
 
@@ -347,7 +532,42 @@ def _inner_codes_from_parentheticals(raw_code: str) -> list[str]:
     return inner
 
 
-def _extract_from_text(text: str, source: dict, use_ai_fallback: bool) -> list[dict]:
+def _line_contexts(text: str, context: "_HierarchyContext") -> list[tuple[int, dict]]:
+    """Hierarchy snapshot in effect for each line of ``text``.
+
+    Heading lines (Roman / dotted markers, with no code on the
+    line) update the shared ``context`` as scanning proceeds, so
+    a heading on one line governs the codes on the lines below
+    it. Matching itself is unchanged: codes are still found by
+    one scan over the whole string, and each match takes the
+    snapshot of the line where it starts.
+    """
+    snapshots = []
+    offset = 0
+    for line in (text or "").splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped and not STANDARD_CODE_PATTERN.search(line):
+            heading = parse_heading_text(stripped)
+            if heading:
+                context.update(heading)
+        snapshots.append((offset, context.snapshot()))
+        offset += len(line)
+    if not snapshots:
+        snapshots.append((0, context.snapshot()))
+    return snapshots
+
+
+def _snapshot_at(snapshots: list[tuple[int, dict]], position: int) -> dict:
+    current = snapshots[0][1]
+    for offset, snapshot in snapshots:
+        if offset > position:
+            break
+        current = snapshot
+    return current
+
+
+def _extract_from_text(text: str, source: dict, use_ai_fallback: bool,
+                       context: "_HierarchyContext | None" = None) -> list[dict]:
     """Extract codes from one text string (one cell, one paragraph, one page).
 
     Only the cleaned matched code is ever emitted as ``"code"``:
@@ -356,7 +576,16 @@ def _extract_from_text(text: str, source: dict, use_ai_fallback: bool) -> list[d
     record. Table callers must use :func:`_extract_from_cells`,
     which scans each cell separately, instead of joining a row's
     cells into one ``" | "`` string and scanning that.
+
+    Each record also carries the hierarchy context in effect
+    where its code appears (``parent_level_1`` / ``parent_level_2``)
+    and the row's ``stt`` when the caller put one in ``source``.
+    A shared ``context`` object lets headings in earlier text
+    govern later text (paragraphs before tables, pages before
+    tables); without one, a fresh context starts empty.
     """
+    ctx = context if context is not None else _HierarchyContext()
+    snapshots = _line_contexts(text or "", ctx)
     found = []
     for match in STANDARD_CODE_PATTERN.finditer(text or ""):
         matched_code = match.group("code")
@@ -368,7 +597,10 @@ def _extract_from_text(text: str, source: dict, use_ai_fallback: bool) -> list[d
             if use_ai_fallback
             else parse_standard_code(raw_code)
         )
-        record = {"code": raw_code, **source, "parsed": parsed}
+        record = {
+            "code": raw_code, **source, "parsed": parsed,
+            **_snapshot_at(snapshots, match.start()),
+        }
         if "standard_name" in source:
             # A row's title may be a whole part list; give this
             # record only the title of its own part (falling back
@@ -385,7 +617,10 @@ def _extract_from_text(text: str, source: dict, use_ai_fallback: bool) -> list[d
                 if use_ai_fallback
                 else parse_standard_code(inner_code)
             )
-            inner_record = {"code": inner_code, **source, "parsed": inner_parsed}
+            inner_record = {
+                "code": inner_code, **source, "parsed": inner_parsed,
+                **_snapshot_at(snapshots, match.start()),
+            }
             if "standard_name" in source:
                 inner_record["standard_name"] = standard_name_for_parts(
                     source.get("standard_name"), inner_parsed
@@ -394,13 +629,26 @@ def _extract_from_text(text: str, source: dict, use_ai_fallback: bool) -> list[d
     return found
 
 
-def _extract_from_cells(cells, source: dict, use_ai_fallback: bool) -> list[dict]:
-    """Scan cells independently so a title cell never joins a code candidate."""
+def _extract_from_cells(cells, source: dict, use_ai_fallback: bool,
+                        context: "_HierarchyContext | None" = None,
+                        stt_column: int | None = None) -> list[dict]:
+    """Scan cells independently so a title cell never joins a code candidate.
+
+    A heading row updates the shared hierarchy ``context`` and
+    yields no records; a code row yields records carrying the
+    current context snapshot and the row's ``stt``.
+    """
+    ctx = context if context is not None else _HierarchyContext()
+    heading = _heading_from_row(cells)
+    if heading:
+        ctx.update(heading)
+        return []
+    row_source = {**source, "stt": _stt_from_row(cells, stt_column)}
     found = []
     for cell in cells:
         value = _text(cell)
         if value:
-            found.extend(_extract_from_text(value, source, use_ai_fallback))
+            found.extend(_extract_from_text(value, row_source, use_ai_fallback, ctx))
     return found
 
 
@@ -431,6 +679,9 @@ def extract_standard_codes_from_pdf(file_path, use_ai_fallback=False) -> list[di
 
     path = Path(file_path)
     records = []
+    # One hierarchy context for the whole file: a heading on an
+    # early page governs codes on later pages until replaced.
+    context = _HierarchyContext()
     with pdfplumber.open(path) as pdf:
         for page_number, page in enumerate(pdf.pages, start=1):
             page_text = page.extract_text() or ""
@@ -438,11 +689,13 @@ def extract_standard_codes_from_pdf(file_path, use_ai_fallback=False) -> list[di
                 page_text,
                 {"file": str(path), "page": page_number, "row": None},
                 use_ai_fallback,
+                context,
             ))
 
             # Table extraction can preserve row groupings that plain text loses.
             for table_number, table in enumerate(page.extract_tables() or [], start=1):
                 title_column = _find_title_column(table)
+                stt_column = _find_stt_column(table)
                 for row_number, row in enumerate(table, start=1):
                     records.extend(_extract_from_cells(
                         row,
@@ -452,6 +705,8 @@ def extract_standard_codes_from_pdf(file_path, use_ai_fallback=False) -> list[di
                             "standard_name": _standard_name_from_row(row, title_column),
                         },
                         use_ai_fallback,
+                        context,
+                        stt_column,
                     ))
     return _deduplicate(records)
 
@@ -470,6 +725,11 @@ def extract_standard_codes_from_excel(file_path, use_ai_fallback=False) -> list[
     for sheet_name, frame in sheets.items():
         rows = frame.values.tolist()
         title_column = _find_title_column(rows)
+        stt_column = _find_stt_column(rows)
+        # A fresh hierarchy per sheet: sheets are separate
+        # catalogs, so a heading from one must not leak into
+        # the next.
+        context = _HierarchyContext()
         for row_index, values in frame.iterrows():
             cells = [_text(value) for value in values]
             records.extend(_extract_from_cells(
@@ -480,6 +740,8 @@ def extract_standard_codes_from_excel(file_path, use_ai_fallback=False) -> list[
                     "standard_name": _standard_name_from_row(cells, title_column),
                 },
                 use_ai_fallback,
+                context,
+                stt_column,
             ))
     return _deduplicate(records)
 
@@ -499,29 +761,50 @@ def extract_standard_codes_from_docx(file_path, use_ai_fallback=False) -> list[d
     path = Path(file_path)
     doc = Document(str(path))
     records = []
+    # One hierarchy context for the whole document, scanned in
+    # document order: a heading paragraph governs the tables
+    # that follow it. Iterating doc.paragraphs then doc.tables
+    # would lose that order, so walk the body elements directly.
+    context = _HierarchyContext()
+    try:
+        from docx.table import Table as _DocxTable
+        from docx.text.paragraph import Paragraph as _DocxParagraph
+    except ModuleNotFoundError as exc:  # pragma: no cover
+        raise RuntimeError("DOCX extraction requires python-docx") from exc
 
-    for para_number, paragraph in enumerate(doc.paragraphs, start=1):
-        records.extend(_extract_from_text(
-            paragraph.text or "",
-            {"file": str(path), "paragraph": para_number, "table": None, "row": None},
-            use_ai_fallback,
-        ))
-
-    for table_number, table in enumerate(doc.tables, start=1):
-        table_rows = [[cell.text for cell in row.cells] for row in table.rows]
-        title_column = _find_title_column(table_rows)
-        for row_number, row in enumerate(table.rows, start=1):
-            records.extend(_extract_from_cells(
-                [cell.text for cell in row.cells],
-                {
-                    "file": str(path), "paragraph": None,
-                    "table": table_number, "row": row_number,
-                    "standard_name": _standard_name_from_row(
-                        table_rows[row_number - 1], title_column
-                    ),
-                },
+    para_number = 0
+    table_number = 0
+    for child in doc.element.body.iterchildren():
+        tag = child.tag.split("}")[-1]
+        if tag == "p":
+            para_number += 1
+            paragraph = _DocxParagraph(child, doc)
+            records.extend(_extract_from_text(
+                paragraph.text or "",
+                {"file": str(path), "paragraph": para_number, "table": None, "row": None},
                 use_ai_fallback,
+                context,
             ))
+        elif tag == "tbl":
+            table_number += 1
+            table = _DocxTable(child, doc)
+            table_rows = [[cell.text for cell in row.cells] for row in table.rows]
+            title_column = _find_title_column(table_rows)
+            stt_column = _find_stt_column(table_rows)
+            for row_number, row in enumerate(table.rows, start=1):
+                records.extend(_extract_from_cells(
+                    [cell.text for cell in row.cells],
+                    {
+                        "file": str(path), "paragraph": None,
+                        "table": table_number, "row": row_number,
+                        "standard_name": _standard_name_from_row(
+                            table_rows[row_number - 1], title_column
+                        ),
+                    },
+                    use_ai_fallback,
+                    context,
+                    stt_column,
+                ))
     return _deduplicate(records)
 
 
