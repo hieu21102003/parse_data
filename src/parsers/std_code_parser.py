@@ -71,7 +71,12 @@ ORG_MAP = {
     "ISO": "ISO",
     "EN": "EN",
     "EN ISO": "ISO",
-    "BS EN": "EN",
+    # Preserve this literal combined prefix when it appears in source data.
+    # "BS EN" is the British adoption of an EN standard, a different
+    # designation from a bare "EN"; reducing it to "EN" dropped the
+    # "BS" from the corrected code, exactly the loss the "TCVN EN"
+    # entry above was added to prevent. Same rule as "TCVN EN".
+    "BS EN": "BS EN",
     "BS": "BS",
     "DIN EN": "EN",
     "DIN ISO": "DIN",

@@ -71,14 +71,14 @@ def test_process_text_yields_both_codes_with_both_years():
         by_code = {r["corrected_code"]: r for r in records}
         # Part expansion: both sides of the compound expand, so
         # each side contributes 10 records, not one "1-10" record.
-        # BS EN normalises to EN, as in the existing BS EN -> EN rule.
+        # BS EN is preserved as written, not reduced to EN.
         assert len(records) == 20
         assert by_code["TCVN 13695-1:2023"]["parts"] == "1"
         assert by_code["TCVN 13695-1:2023"]["year"] == 2023
         assert by_code["TCVN 13695-10:2023"]["year"] == 2023
-        assert by_code["EN 13146-1:2019"]["parts"] == "1"
-        assert by_code["EN 13146-1:2019"]["year"] == 2019
-        assert by_code["EN 13146-10:2019"]["year"] == 2019
+        assert by_code["BS EN 13146-1:2019"]["parts"] == "1"
+        assert by_code["BS EN 13146-1:2019"]["year"] == 2019
+        assert by_code["BS EN 13146-10:2019"]["year"] == 2019
 
 
 def test_process_document_yields_both_codes(tmp_path):
@@ -94,9 +94,9 @@ def test_process_document_yields_both_codes(tmp_path):
     # Part expansion: 10 TCVN parts + 10 EN parts.
     assert len(records) == 20
     assert codes["TCVN 13695-1:2023"]["year"] == 2023
-    assert codes["EN 13146-1:2019"]["year"] == 2019
-    assert codes["EN 13146-1:2019"]["parts"] == "1"
-    assert codes["EN 13146-10:2019"]["year"] == 2019
+    assert codes["BS EN 13146-1:2019"]["year"] == 2019
+    assert codes["BS EN 13146-1:2019"]["parts"] == "1"
+    assert codes["BS EN 13146-10:2019"]["year"] == 2019
 
 
 def test_gemini_prompt_covers_compound_equivalent(monkeypatch):
