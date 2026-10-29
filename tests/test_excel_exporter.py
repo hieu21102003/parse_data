@@ -20,14 +20,15 @@ except ModuleNotFoundError:  # pragma: no cover - repo-root PYTHONPATH
     from src.pipeline import main  # type: ignore
 
 EXPECTED_HEADERS = [
-    "Raw Text", "Corrected Code", "Organization", "Main Number",
-    "Year", "Parts", "Suffix",
+    "Raw Text", "Corrected Code", "Standard Name", "Organization",
+    "Main Number", "Year", "Parts", "Suffix",
 ]
 
 RECORDS = [
     {
         "raw_text": "TCVN 13695-1 đến 10:2023",
         "corrected_code": "TCVN 13695-1-10:2023",
+        "standard_name": "Cầu đường sắt khổ 1435",
         "organization": "TCVN",
         "main_number": "13695",
         "year": 2023,
@@ -37,10 +38,13 @@ RECORDS = [
         "confidence_score": 0.9,
         "verified": True,
         "explanation": "Deterministic parse passed.",
+        "parent_level_1": "I. Nhóm công trình đường sắt",
+        "stt": "1",
     },
     {
         "raw_text": "TCVN 4756",
         "corrected_code": "TCVN 4756",
+        "standard_name": None,
         "organization": "TCVN",
         "main_number": "4756",
         "year": None,
@@ -53,32 +57,33 @@ RECORDS = [
 ]
 
 
-def test_columns_are_exactly_seven_in_order():
+def test_columns_are_exactly_eight_in_order():
     assert [header for header, _, _ in COLUMNS] == EXPECTED_HEADERS
-    assert len(COLUMNS) == 7
+    assert len(COLUMNS) == 8
 
 
-def test_export_writes_only_seven_columns_in_order(tmp_path):
+def test_export_writes_only_eight_columns_in_order(tmp_path):
     path = tmp_path / "ket_qua.xlsx"
     returned = export_to_excel(RECORDS, path)
     assert str(returned) == str(path)
 
     workbook = load_workbook(path)
     sheet = workbook.active
-    assert sheet.max_column == 7
+    assert sheet.max_column == 8
     assert sheet.max_row == 3
     assert [cell.value for cell in sheet[1]] == EXPECTED_HEADERS
     assert [cell.value for cell in sheet[2]] == [
-        "TCVN 13695-1 đến 10:2023", "TCVN 13695-1-10:2023", "TCVN",
-        "13695", 2023, "1-10", None,
+        "TCVN 13695-1 đến 10:2023", "TCVN 13695-1-10:2023",
+        "Cầu đường sắt khổ 1435", "TCVN", "13695", 2023, "1-10", None,
     ]
     assert [cell.value for cell in sheet[3]] == [
-        "TCVN 4756", "TCVN 4756", "TCVN", "4756", None, None, "AC:2009",
+        "TCVN 4756", "TCVN 4756", None, "TCVN", "4756", None, None, "AC:2009",
     ]
-    # No confidence_score / explanation anywhere in the sheet.
+    # No confidence_score / explanation / hierarchy fields in the sheet.
     values = [cell.value for row in sheet.iter_rows() for cell in row]
     assert 0.9 not in values
     assert "Deterministic parse passed." not in values
+    assert "I. Nhóm công trình đường sắt" not in values
 
 
 def test_header_style_is_navy_white_bold_centered(tmp_path):
@@ -97,10 +102,11 @@ def test_data_alignments(tmp_path):
     export_to_excel(RECORDS, path)
     sheet = load_workbook(path).active
     row = sheet[2]
-    # Raw Text and Corrected Code: left; the other five: center.
+    # Raw Text, Corrected Code and Standard Name: left; the other five: center.
     assert row[0].alignment.horizontal == "left"
     assert row[1].alignment.horizontal == "left"
-    for cell in row[2:]:
+    assert row[2].alignment.horizontal == "left"
+    for cell in row[3:]:
         assert cell.alignment.horizontal == "center"
 
 
@@ -110,8 +116,10 @@ def test_column_widths_follow_content_length(tmp_path):
     sheet = load_workbook(path).active
     # Corrected Code is the longest corrected value (20 chars) -> 22.
     assert sheet.column_dimensions["B"].width == len("TCVN 13695-1-10:2023") + 2
-    # Year column: header "Year" (4) beats any year value -> 6.
-    assert sheet.column_dimensions["E"].width == 6
+    # Standard Name is 22 chars (the longest text cell) -> 24.
+    assert sheet.column_dimensions["C"].width == len("Cầu đường sắt khổ 1435") + 2
+    # Year column (F): header "Year" (4) beats any year value -> 6.
+    assert sheet.column_dimensions["F"].width == 6
     assert sheet.column_dimensions["A"].width > len("Raw Text")
 
 
@@ -119,7 +127,7 @@ def test_export_empty_records_still_writes_header(tmp_path):
     path = tmp_path / "empty.xlsx"
     export_to_excel([], path)
     sheet = load_workbook(path).active
-    assert sheet.max_column == 7
+    assert sheet.max_column == 8
     assert sheet.max_row == 1
     assert [cell.value for cell in sheet[1]] == EXPECTED_HEADERS
 
@@ -132,7 +140,7 @@ def test_cli_output_xlsx_writes_excel_and_confirms(tmp_path, capsys):
     sheet = load_workbook(path).active
     assert [cell.value for cell in sheet[1]] == EXPECTED_HEADERS
     assert [cell.value for cell in sheet[2]] == [
-        "TCVN 1234:2020", "TCVN 1234:2020", "TCVN", "1234", 2020, None, None,
+        "TCVN 1234:2020", "TCVN 1234:2020", None, "TCVN", "1234", 2020, None, None,
     ]
 
 
@@ -165,7 +173,7 @@ def test_cli_nested_directory_is_created_for_excel(tmp_path, monkeypatch, capsys
     path = tmp_path / "output" / "ket_qua.xlsx"
     assert path.exists()
     sheet = load_workbook(path).active
-    assert sheet.max_column == 7
+    assert sheet.max_column == 8
 
 
 def test_cli_nested_directory_is_created_for_json(tmp_path, monkeypatch):
@@ -184,7 +192,7 @@ def test_excel_file_is_binary_zip_not_text(tmp_path):
     assert data[:2] == b"PK"  # ZIP magic: a real .xlsx file
     assert not data.startswith(b"[")  # never JSON text via write_text()
     # And it must still open as a workbook.
-    assert load_workbook(path).active.max_column == 7
+    assert load_workbook(path).active.max_column == 8
 
 
 def test_exporter_directly_creates_nested_directory(tmp_path):

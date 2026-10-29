@@ -191,6 +191,9 @@ the spec in the task: ingest -> deterministic parse -> Gemini fallback
     "raw_text": "TCVN 1234:2020",
     "corrected_code": "TCVN 1234:2020",
     "standard_name": null,
+    "parent_level_1": null,
+    "parent_level_2": null,
+    "stt": null,
     "organization": "TCVN",
     "main_number": "1234",
     "year": 2020,
@@ -267,8 +270,8 @@ others (in particular no `confidence_score` or `explanation`):
 `Raw Text | Corrected Code | Standard Name | Organization | Main Number | Year | Parts | Suffix`
 
 Header: navy fill (`000080`), white bold text, centered. Data:
-left-aligned for Raw Text and Corrected Code, centered for the
-other five columns. Column widths are set from the content length
+left-aligned for Raw Text, Corrected Code and Standard Name, centered
+for the other five columns. Column widths are set from the content length
 (longest header/cell + 2, capped at 80). Empty fields (`year`,
 `parts`, `suffix` when missing) become blank cells, not the text
 `None`.

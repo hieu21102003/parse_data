@@ -23,7 +23,7 @@ Run from the repo root, e.g.:
     PYTHONPATH=src python -m pipeline sample.pdf -o out.json
     PYTHONPATH=src python -m pipeline sample.pdf --no-ai-fallback -o out.json
     PYTHONPATH=src python -m pipeline --text "TCVN 1234:2020" -o ket_qua.xlsx
-      # -> formatted Excel file with exactly 7 columns (see
+      # -> formatted Excel file with exactly 8 columns (see
       # src/exporter/excel_exporter.py) and a confirmation message.
 
 ``ai_suggester`` is an injectable callable ``(raw_text) -> dict`` used
@@ -644,7 +644,7 @@ def main(argv=None) -> int:
                              "return the deterministic result instead (fully offline).")
     parser.add_argument("-o", "--output",
                         help="Write results to this file instead of stdout: "
-                             ".xlsx for a formatted Excel file with exactly 7 columns "
+                             ".xlsx for a formatted Excel file with exactly 8 columns "
                              "(see src/exporter/excel_exporter.py), .json for JSON, "
                              "any other extension is written as Excel format.")
     args = parser.parse_args(argv)

@@ -48,3 +48,4 @@ requests
 # Development & Testing
 # =========================
 pytest
+httpx  # fastapi.testclient

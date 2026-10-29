@@ -1,0 +1,13 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.env
+bck
+tests
+docs
+*.xlsx
+*.pdf
+!requirements-api.txt

@@ -70,7 +70,7 @@ def _column_widths(records) -> list[int]:
 def export_to_excel(records, output_path) -> Path:
     """Write ``records`` (pipeline dicts) to ``output_path`` as .xlsx.
 
-    Only the seven COLUMNS above are written, in order. Parent
+    Only the eight COLUMNS above are written, in order. Parent
     directories are created if needed. Returns the resolved output
     path so the CLI can confirm it to the user.
     """
